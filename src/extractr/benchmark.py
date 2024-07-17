@@ -182,10 +182,6 @@ def run_it(settings):
         for i, seq in enumerate(repeats):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
         
-    ### step 4. Analyze repeat borders
-
-    ### step 5. Enrich repeats variants
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark on human T2T data.")
