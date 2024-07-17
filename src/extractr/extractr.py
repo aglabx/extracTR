@@ -9,7 +9,7 @@ import argparse
 import os
 import aindex
 
-from .core_functions.sdat_tools import load_sdat_as_list
+from .core_functions.index_tools import compute_and_get_index
 
 from .core_functions import tr_greedy_finder
 
@@ -23,24 +23,7 @@ def run_it(settings):
     prefix = settings.get("output", "test")
 
     ### step 1. Compute aindex for reads
-    command = f"python ~/Dropbox/workspace/aindex/scripts/compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-    print(command)
-    os.system(command)
-
-    sdat_file = f"{prefix}.23.sdat"
-
-    sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
-
-    ### Step 2. Load raw reads aindex
-
-    settings = {
-        "index_prefix": f"{prefix}.23",
-        "aindex_prefix": f"{prefix}.23",
-        "reads_file": f"{prefix}.reads",
-        "max_tf": 10000000,
-    }
-
-    kmer2tf = aindex.load_aindex(settings, skip_reads=True, skip_aindex=True)
+    kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
 

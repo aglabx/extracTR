@@ -1,4 +1,10 @@
-from colorama import reinit
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# @created: 20.02.2024
+# @author: Aleksey Komissarov
+# @contact: ad3002@gmail.com
+
 from intervaltree import IntervalTree
 from tqdm import tqdm
 
@@ -82,7 +88,18 @@ def compute_stats(data, trf_our_format, name="our"):
   print("R", r)
   print("F1", 2 * p * r / (p+r))
 
-  return missed_repeats_fp, missed_repeats_fn
+  evaluation = {
+    "FP": false_positive,
+    "FN": false_negative,
+    "TP": true_positive,
+    "TN": true_negative,
+    "Accuracy": true_positive/len(trf_our_format),
+    "P": p,
+    "R": r,
+    "F1": 2 * p * r / (p+r)
+  }
+
+  return evaluation, missed_repeats_fp, missed_repeats_fn
 
 
 ### version 2 all kmers
@@ -166,5 +183,5 @@ def compute_loci_chains(predicted_trs, ref2tf, delta=1000, min_array_length=1000
 def compute_score(monomers_dataset, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100,min_fish_strength=100, locus_length_cutoff=10_000, k=23):
     all_loci_chains = compute_loci_chains(monomers_dataset, ref2tf, delta=delta, min_array_length=min_array_length, k=k, min_fish_strength=min_fish_strength)
     data = get_bed_data(all_loci_chains, ref2tf, chrm2start, locus_length_cutoff=locus_length_cutoff)
-    missed_repeats_fp, missed_repeats_fn = compute_stats(data, trf_our_format)
-    return missed_repeats_fp, missed_repeats_fn
+    evaluation, missed_repeats_fp, missed_repeats_fn = compute_stats(data, trf_our_format)
+    return evaluation, missed_repeats_fp, missed_repeats_fn

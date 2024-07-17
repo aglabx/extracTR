@@ -1,3 +1,38 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# @created: 20.02.2024
+# @author: Aleksey Komissarov
+# @contact: ad3002@gmail.com
+
+import os
+from .sdat_tools import load_sdat_as_list
+import aindex
+
+def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
+
+    sdat_file = f"{prefix}.23.sdat"
+    index_prefix_file = f"{prefix}.23"
+
+    if not os.path.isfile(sdat_file) or  not os.path.isfile(index_prefix_file):
+        command = f"python ~/Dropbox/workspace/aindex/scripts/compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
+        print(command)
+        os.system(command)
+
+    sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
+
+    ### Step 2. Load raw reads aindex
+
+    settings = {
+        "index_prefix": f"{prefix}.23",
+        "aindex_prefix": f"{prefix}.23",
+        "reads_file": f"{prefix}.reads",
+        "max_tf": 10000000,
+    }
+
+    kmer2tf = aindex.load_aindex(settings, skip_reads=True, skip_aindex=True)
+    return kmer2tf, sdat
+
 def print_kmer_right_read_fragments(kmer, kmer2tf, read_length=310, topk=100, split_springs=True):
   pos = kmer2tf.pos(kmer)
   for p in pos[:topk]:

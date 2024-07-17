@@ -5,13 +5,7 @@ from setuptools import find_packages, setup
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-version = None
-for line in open("./src/extractr/__init__.py"):
-    m = re.search("__version__\s*=\s*(.*)", line)
-    if m:
-        version = m.group(1).strip()[1:-1]  # quotes
-        break
-assert version
+version = "1.0.0"
 
 setup(
     name="extracTR",

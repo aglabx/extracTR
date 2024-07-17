@@ -1,3 +1,10 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# @created: 20.02.2024
+# @author: Aleksey Komissarov
+# @contact: ad3002@gmail.com
+
 from trseeker.tools.sequence_tools import get_revcomp
 
 def load_sdat_as_dict(file_name, minimal_tf=100):
