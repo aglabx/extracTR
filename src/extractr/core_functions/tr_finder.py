@@ -126,6 +126,8 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
             solutions = []
             for i, nucleotide in enumerate(alphabet):
                 ctf = kmer2tf[prefix+nucleotide]
+                if ctf < MIN_TF:
+                    continue
                 if ctf:
                     solutions.append((ctf, nucleotide))  
             if not solutions:
@@ -145,7 +147,10 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
 
             if kmer in cache:
                 rid, strand, i = cache[kmer]
-                second_status = repeats[rid][0]
+                if not rid in repeats:
+                    second_status = "self"
+                else:
+                    second_status = repeats[rid][0]
                 next_rid = rid
                 next_i = i
                 status = "frag"
