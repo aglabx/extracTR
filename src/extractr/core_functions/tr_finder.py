@@ -9,7 +9,7 @@ from collections import defaultdict
 from trseeker.tools.sequence_tools import get_revcomp
 from tqdm import tqdm
 from collections import deque
-
+import networkx as nx
 
 def naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_continue=30, k=23):
     ### TODO: save forks decisions
@@ -123,7 +123,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
         prefix = start_kmer[1:]
 
         cache[start_kmer] = (rid, 0, length)
-        
+
         while True:
             solutions = []
             for i, nucleotide in enumerate(alphabet):
@@ -131,11 +131,11 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
                 if ctf < MIN_TF:
                     continue
                 if ctf:
-                    solutions.append((ctf, nucleotide))  
+                    solutions.append((ctf, nucleotide))
             if not solutions:
                 status = "zero"
                 break
-            
+
             solutions.sort()
             ctf, nucleotide = solutions[-1]
             kmer = prefix + nucleotide
@@ -171,7 +171,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
 def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23):
     """
     Extends sequences in both left and right directions except for TRs.
-    
+
     Parameters:
         sdat: List of tuples (kmer, tf) sorted by tf descending.
         kmer2tf: Dictionary mapping k-mer to its tf value.
@@ -179,48 +179,48 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
         coverage: Coverage threshold.
         min_fraction_to_continue: Minimum fraction to continue extending.
         k: Length of k-mers.
-    
+
     Returns:
         List of repeats with their status and sequences.
     """
-    
+
     MIN_TF = coverage * 100
-    
+
     repeats = []
     rid = 0
-    
+
     alphabet = ["A", "C", "T", "G"]
     cache = {}
     print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
-    
+
     for (start_kmer, tf) in tqdm(sdat):
         if tf < MIN_TF:
             break
         if start_kmer in cache:
             continue
-        
+
         # Initialize for bidirectional extension
         seq_deque = deque([start_kmer])
-        status = None
+        final_status = None
         second_status = None
         next_rid = None
         next_i = None
         total_length = k
-        
+
         # Mark the start k-mer in cache
         cache[start_kmer] = (rid, 0, total_length)
-        
+
         # Right extension
         right_prefix = start_kmer[1:]
         right_seq = []
         right_length = 0
         right_status = None
-        
+
         while right_length < max_depth:
             solutions = []
             for nucleotide in alphabet:
                 new_kmer = right_prefix + nucleotide
-                ctf = kmer2tf.get(new_kmer, 0)
+                ctf = kmer2tf[new_kmer]
                 if ctf < MIN_TF:
                     continue
                 if ctf:
@@ -228,18 +228,19 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
             if not solutions:
                 right_status = "zero"
                 break
-            
+
             # Select the nucleotide with the highest coverage
             solutions.sort(reverse=True)
             ctf, nucleotide = solutions[0]
             new_kmer = right_prefix + nucleotide
             right_seq.append(nucleotide)
             total_length += 1
-            
+
             if new_kmer == start_kmer:
                 right_status = "tr"
+                print(f"TR detected during right extension for k-mer {start_kmer}")
                 break
-            
+
             if new_kmer in cache:
                 existing_rid, strand, i = cache[new_kmer]
                 if existing_rid not in repeats:
@@ -250,28 +251,34 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                 next_i = i
                 right_status = "frag"
                 break
-            
+
             # Update for next iteration
             cache[new_kmer] = (rid, 0, total_length)
             right_prefix = new_kmer[1:]
             right_length += 1
-        
+
         # If TR detected in right extension, skip left extension
         if right_status == "tr":
             final_status = "tr"
-            full_seq = ''.join(right_seq)
+            # To include the start_kmer, reconstruct the full sequence
+            # Since it's a TR, the sequence loops back to the start_kmer
+            # The full sequence should represent one full repeat unit
+            # Assuming right_seq represents the repeat unit after the start_kmer
+            # For simplicity, concatenate start_kmer and right_seq
+            # Adjust this logic based on the actual TR structure
+            full_seq = start_kmer + ''.join(right_seq)
         else:
             # Left extension
             left_suffix = start_kmer[:-1]
             left_seq = []
             left_length = 0
             left_status = None
-            
+
             while left_length < max_depth:
                 solutions = []
                 for nucleotide in alphabet:
                     new_kmer = nucleotide + left_suffix
-                    ctf = kmer2tf.get(new_kmer, 0)
+                    ctf = kmer2tf[new_kmer]
                     if ctf < MIN_TF:
                         continue
                     if ctf:
@@ -279,18 +286,19 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                 if not solutions:
                     left_status = "zero"
                     break
-                
+
                 # Select the nucleotide with the highest coverage
                 solutions.sort(reverse=True)
                 ctf, nucleotide = solutions[0]
                 new_kmer = nucleotide + left_suffix
                 left_seq.append(nucleotide)
                 total_length += 1
-                
+
                 if new_kmer == start_kmer:
                     left_status = "tr"
+                    print(f"TR detected during left extension for k-mer {start_kmer}")
                     break
-                
+
                 if new_kmer in cache:
                     existing_rid, strand, i = cache[new_kmer]
                     if existing_rid not in repeats:
@@ -301,12 +309,12 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                     next_i = i
                     left_status = "frag"
                     break
-                
+
                 # Update for next iteration
                 cache[new_kmer] = (rid, 0, total_length)
                 left_suffix = new_kmer[:-1]
                 left_length += 1
-            
+
             # Determine overall status
             if left_status == "tr" or right_status == "tr":
                 final_status = "tr"
@@ -316,11 +324,221 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                 final_status = "zero"
             else:
                 final_status = "extended"
-            
+
             # Combine left and right sequences
+            # Reverse left_seq to get the correct order
             full_seq = ''.join(reversed(left_seq)) + start_kmer + ''.join(right_seq)
-        
+
+        # Handle cases where full_seq might still be empty
+        if not full_seq:
+            print(f"Warning: Empty sequence for repeat ID {rid}, start_kmer {start_kmer}")
+            full_seq = None
+
         repeats.append((final_status, second_status, next_rid, next_i, full_seq))
         rid += 1
-    
+
     return repeats
+
+def tr_greedy_finder_bidirectional_graph(
+    sdat,
+    kmer2tf,
+    max_depth=30_000,
+    coverage=30,
+    min_fraction_to_continue=30,
+    k=23
+):
+    """
+    Extends sequences in both left and right directions except for TRs and constructs a graph representation.
+
+    Parameters:
+        sdat: List of tuples (kmer, tf) sorted by tf descending.
+        kmer2tf: Dictionary mapping k-mer to its tf value.
+        max_depth: Maximum length to extend.
+        coverage: Coverage threshold.
+        min_fraction_to_continue: Minimum fraction to continue extending.
+        k: Length of k-mers.
+
+    Returns:
+        G: A NetworkX graph representing repeats and their relationships.
+    """
+
+    MIN_TF = coverage * 100
+
+    # Initialize an empty directed graph
+    G = nx.DiGraph()
+
+    alphabet = ["A", "C", "T", "G"]
+    cache = {}
+    print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
+
+    for (start_kmer, tf) in tqdm(sdat):
+        if tf < MIN_TF:
+            break
+        if start_kmer in cache:
+            continue
+
+        # Initialize for bidirectional extension
+        seq_deque = deque([start_kmer])
+        final_status = None
+        second_status = None
+        next_rid = None
+        next_i = None
+        total_length = k
+
+        # Assign a unique repeat ID
+        rid = len(G.nodes)
+
+        # Add the start k-mer as a node
+        G.add_node(rid,
+                   status="start",
+                   sequence=start_kmer,
+                   kmer=start_kmer,
+                   tf=tf)
+
+        # Mark the start k-mer in cache
+        cache[start_kmer] = rid
+
+        # Right extension
+        right_prefix = start_kmer[1:]
+        right_seq = []
+        right_length = 0
+        right_status = None
+
+        while right_length < max_depth:
+            solutions = []
+            for nucleotide in alphabet:
+                new_kmer = right_prefix + nucleotide
+                ctf = kmer2tf[new_kmer]
+                if ctf < MIN_TF:
+                    continue
+                if ctf:
+                    solutions.append((ctf, nucleotide))
+            if not solutions:
+                right_status = "zero"
+                break
+
+            # Select the nucleotide with the highest coverage
+            solutions.sort(reverse=True)
+            break_it = False
+            for ctf, nucleotide in solutions:
+
+              new_kmer = right_prefix + nucleotide
+              right_seq.append(nucleotide)
+              total_length += 1
+
+              if new_kmer == start_kmer:
+                  right_status = "tr"
+                  print(f"TR detected during right extension for k-mer {start_kmer}")
+                  break_it = True
+                  break
+
+              if new_kmer in cache:
+                  existing_rid = cache[new_kmer]
+                  # Add an edge representing a fragment connection
+                  G.add_edge(rid, existing_rid, relation="frag")
+                  right_status = "frag"
+                  continue
+
+              # Assign a new repeat ID for the new k-mer
+              new_rid = len(G.nodes)
+              G.add_node(new_rid,
+                        status="extended",
+                        sequence=new_kmer,
+                        kmer=new_kmer,
+                        tf=ctf)
+              # Add an edge from current repeat to the new repeat
+              G.add_edge(rid, new_rid, relation="extension")
+
+              # Update cache
+              cache[new_kmer] = new_rid
+              # Update for next iteration
+              right_prefix = new_kmer[1:]
+              right_length += 1
+
+        # If TR detected in right extension, add a self-loop
+        if right_status == "tr":
+            G.nodes[rid]['status'] = "tr"
+            G.add_edge(rid, rid, relation="self")
+            full_seq = start_kmer + ''.join(right_seq)
+        else:
+            # Left extension
+            left_suffix = start_kmer[:-1]
+            left_seq = []
+            left_length = 0
+            left_status = None
+
+            while left_length < max_depth:
+                solutions = []
+                for nucleotide in alphabet:
+                    new_kmer = nucleotide + left_suffix
+                    ctf = kmer2tf[new_kmer]
+                    if ctf < MIN_TF:
+                        continue
+                    if ctf:
+                        solutions.append((ctf, nucleotide))
+                if not solutions:
+                    left_status = "zero"
+                    break
+
+                # Select the nucleotide with the highest coverage
+                solutions.sort(reverse=True)
+                ctf, nucleotide = solutions[0]
+                new_kmer = nucleotide + left_suffix
+                left_seq.append(nucleotide)
+                total_length += 1
+
+                if new_kmer == start_kmer:
+                    left_status = "tr"
+                    print(f"TR detected during left extension for k-mer {start_kmer}")
+                    break
+
+                if new_kmer in cache:
+                    existing_rid = cache[new_kmer]
+                    # Add an edge representing a fragment connection
+                    G.add_edge(rid, existing_rid, relation="frag")
+                    left_status = "frag"
+                    break
+
+                # Assign a new repeat ID for the new k-mer
+                new_rid = len(G.nodes)
+                G.add_node(new_rid,
+                           status="extended",
+                           sequence=new_kmer,
+                           kmer=new_kmer,
+                           tf=ctf)
+                # Add an edge from current repeat to the new repeat
+                G.add_edge(rid, new_rid, relation="extension")
+
+                # Update cache
+                cache[new_kmer] = new_rid
+                # Update for next iteration
+                left_suffix = new_kmer[:-1]
+                left_length += 1
+
+            # Determine overall status and add edges accordingly
+            if left_status == "tr" or right_status == "tr":
+                final_status = "tr"
+                G.nodes[rid]['status'] = "tr"
+                # Add a self-loop to indicate TR
+                G.add_edge(rid, rid, relation="self")
+                # Combine left and right sequences
+                full_seq = ''.join(reversed(left_seq)) + start_kmer + ''.join(right_seq)
+            elif left_status == "frag" or right_status == "frag":
+                final_status = "frag"
+                G.nodes[rid]['status'] = "frag"
+            elif left_status == "zero" and right_status == "zero":
+                final_status = "zero"
+                G.nodes[rid]['status'] = "zero"
+            else:
+                final_status = "extended"
+                G.nodes[rid]['status'] = "extended"
+                # Combine left and right sequences
+                full_seq = ''.join(reversed(left_seq)) + start_kmer + ''.join(right_seq)
+
+            # Optionally, store the full sequence as an attribute
+            G.nodes[rid]['sequence'] = full_seq if 'full_seq' in locals() else start_kmer
+
+        # Note: The 'full_seq' is optional and can be stored or used as needed
+        # For clarity, we're not using it further in this graph structure
+
+    return G

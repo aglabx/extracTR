@@ -6,13 +6,8 @@
 # @contact: ad3002@gmail.com
 
 import argparse
-import os
-import re
-import aindex
-
 from .core_functions.index_tools import compute_and_get_index
-
-from .core_functions.tr_finder import tr_greedy_finder
+from .core_functions.tr_finder import tr_greedy_finder_bidirectional, tr_greedy_finder_bidirectional_graph
 
 def run_it(settings):
 
@@ -29,7 +24,7 @@ def run_it(settings):
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
 
-    repeats = tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23)
+    repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23)
 
     all_predicted_trs = []
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
@@ -60,9 +55,6 @@ def run_it(settings):
     ### step 4. Analyze repeat borders
 
     ### step 5. Enrich repeats variants
-    
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract and analyze tandem repeats from raw DNA sequences.")
     parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.")

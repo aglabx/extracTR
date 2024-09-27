@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-version = "1.0.0"
+version = "0.2.0"
 
 setup(
     name="extracTR",
@@ -20,11 +20,13 @@ setup(
     url="https://github.com/aglabx/extracTR",
     author="Aleksey Komissarov",
     author_email="ad3002@gmail.com",
-    description="Extract and analyze tandem repeats from raw DNA sequences.",
+    description="Extract and analyze satellite DNA from raw sequences.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     install_requires=[
-        
+        "argparse",
+        "networkx",
+        "tqdm",
     ],
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -37,7 +39,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'extractr = extracTR.extract:run_it',
+            'extracTR = extracTR.extractr:run_it',
         ],
     },
 )
