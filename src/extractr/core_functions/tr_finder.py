@@ -107,7 +107,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
     alphabet = ["A", "C", "T", "G"]
     rid = 0
     cache = {}
-    print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
+    # print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
     for (start_kmer, tf) in tqdm(sdat):
         if tf < MIN_TF:
             break
@@ -189,7 +189,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
 
     alphabet = ["A", "C", "T", "G"]
     cache = {}
-    print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
+    # print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
 
     for (start_kmer, tf) in tqdm(sdat):
         if tf < MIN_TF:
@@ -236,7 +236,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
 
             if new_kmer == start_kmer:
                 right_status = "tr"
-                print(f"TR detected during right extension for k-mer {start_kmer}")
+                # print(f"TR detected during right extension for k-mer {start_kmer}")
                 break
 
             if new_kmer in cache:
@@ -294,7 +294,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
 
                 if new_kmer == start_kmer:
                     left_status = "tr"
-                    print(f"TR detected during left extension for k-mer {start_kmer}")
+                    # print(f"TR detected during left extension for k-mer {start_kmer}")
                     break
 
                 if new_kmer in cache:
@@ -329,7 +329,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
 
         # Handle cases where full_seq might still be empty
         if not full_seq:
-            print(f"Warning: Empty sequence for repeat ID {rid}, start_kmer {start_kmer}")
+            # print(f"Warning: Empty sequence for repeat ID {rid}, start_kmer {start_kmer}")
             full_seq = None
 
         repeats.append((final_status, second_status, next_rid, next_i, full_seq))

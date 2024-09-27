@@ -56,7 +56,7 @@ def run_it():
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
         if status == "tr":
             seq = seq[:-k]
-            print(status, second_status, next_rid, next_i, len(seq), seq)
+            # print(status, second_status, next_rid, next_i, len(seq), seq)
             all_predicted_trs.append(seq)
         elif status == "frag":
             pass
@@ -65,10 +65,10 @@ def run_it():
         elif status == "long":
             pass
         else:
-            print(status, second_status, next_rid, next_i, len(seq), seq)
+            # print(status, second_status, next_rid, next_i, len(seq), seq)
             raise Exception("Unknown status")
         
-    print(len(all_predicted_trs))
+    print(f"Predicted {len(all_predicted_trs)} tandem repeats.")
 
     ### step 3. Save results to CSV
 
