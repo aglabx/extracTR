@@ -2,12 +2,13 @@
 
 ## Introduction
 
-extracTR is a powerful tool for extracting and analyzing tandem repeats from raw DNA sequences. It utilizes advanced algorithms to identify repetitive patterns in genomic data, providing valuable insights for researchers in genomics and bioinformatics.
+extracTR is a tool for identifying and analyzing tandem repeats in genomic sequences. It works with raw sequencing data (FASTQ) or assembled genomes (FASTA), using k-mer based approaches to detect repetitive patterns efficiently.
 
 ## Features
 
 - Efficient tandem repeat detection from raw sequencing data
-- Support for paired-end FASTQ files
+- Support for single-end and paired-end FASTQ files
+- Support for genome assemblies in FASTA format
 - Customizable parameters for fine-tuning repeat detection
 - Output in easy-to-analyze CSV format
 - Multi-threaded processing for improved performance
@@ -62,8 +63,19 @@ conda activate extractr_env
 
 Basic usage:
 
+For paired-end FASTQ files:
 ```bash
 extracTR -1 reads_1.fastq -2 reads_2.fastq -o output_prefix
+```
+
+For single-end FASTQ file:
+```bash
+extracTR -1 reads.fastq -o output_prefix
+```
+
+For genome assembly in FASTA format:
+```bash
+extracTR -f genome.fasta -o output_prefix
 ```
 
 Advanced usage with custom parameters:
@@ -74,11 +86,14 @@ extracTR -1 reads_1.fastq -2 reads_2.fastq -o output_prefix -t 64 -c 30 -k 25
 
 Options:
 - `-1, --fastq1`: Input file with forward DNA sequences in FASTQ format
-- `-2, --fastq2`: Input file with reverse DNA sequences in FASTQ format
+- `-2, --fastq2`: Input file with reverse DNA sequences in FASTQ format (optional for paired-end data)
+- `-f, --fasta`: Input genome assembly in FASTA format
 - `-o, --output`: Prefix for output files
 - `-t, --threads`: Number of threads to use (default: 32)
 - `-c, --coverage`: Coverage to use for indexing (default: 1)
 - `-k, --k`: K-mer size to use for indexing (default: 23)
+
+Note: You must provide either FASTQ file(s) or a FASTA file as input.
 
 ## Output
 
