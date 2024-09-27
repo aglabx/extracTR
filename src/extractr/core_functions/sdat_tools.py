@@ -5,7 +5,9 @@
 # @author: Aleksey Komissarov
 # @contact: ad3002@gmail.com
 
-from trseeker.tools.sequence_tools import get_revcomp
+def get_revcomp(sequence: str) -> str:
+    complement = str.maketrans('ATCGNatcgn~[]', 'TAGCNtagcn~][')
+    return sequence.translate(complement)[::-1]
 
 def load_sdat_as_dict(file_name, minimal_tf=100):
     ''' Load kmer tf data from sorted tsv file.

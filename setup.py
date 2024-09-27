@@ -5,10 +5,14 @@ from setuptools import find_packages, setup
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-version = "0.2.0"
+# Читаем requirements.txt
+with open('requirements.txt') as f:
+    requirements = f.read().splitlines()
+
+version = "0.2.3"
 
 setup(
-    name="extracTR",
+    name="extractr",
     version=version,
     packages=find_packages('src'),
     package_dir={'': 'src'},
@@ -17,17 +21,13 @@ setup(
     include_package_data=True,
     scripts=[],
     license="BSD",
-    url="https://github.com/aglabx/extracTR",
+    url="https://github.com/aglabx/extractr",
     author="Aleksey Komissarov",
     author_email="ad3002@gmail.com",
     description="Extract and analyze satellite DNA from raw sequences.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    install_requires=[
-        "argparse",
-        "networkx",
-        "tqdm",
-    ],
+    install_requires=requirements,  # Используем прочитанные зависимости
     classifiers=[
         "Development Status :: 4 - Beta",
         "Environment :: Console",
@@ -39,7 +39,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'extracTR = extracTR.extractr:run_it',
+            'extractr = extractr.extractr:run_it',
         ],
     },
 )
