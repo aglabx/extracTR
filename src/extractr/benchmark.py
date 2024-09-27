@@ -13,9 +13,9 @@ import aindex
 from .core_functions.sdat_tools import compute_abundace_anomaly
 from .core_functions.tr_finder import naive_tr_finder, tr_greedy_finder
 from collections import Counter
-from trseeker.tools.sequence_tools import get_revcomp
+from .core_functions.helpers import get_revcomp
 from .core_functions.evaluation import compute_score
-from trseeker.tools.sequence_tools import sc_iter_fasta_brute
+from .core_functions.helpers import sc_iter_fasta_brute
 
 
 def get_ref_aindex(fasta_file, ref_prefix, threads, lu=1):
