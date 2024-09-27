@@ -15,9 +15,18 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
     index_prefix_file = f"{prefix}.23"
 
     if not os.path.isfile(sdat_file) or  not os.path.isfile(index_prefix_file):
-        command = f"compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-        print(command)
-        os.system(command)
+      if fastq1 and fastq2:
+          command = f"compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
+          print(command)
+          os.system(command)
+      elif fastq1 and fastq2 is None:
+          command = f"compute_aindex.py -i {fastq1} -t se -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
+          print(command)
+          os.system(command)
+      elif fastq2 and fastq1 is None:
+          command = f"compute_aindex.py -i {fastq2} -t se -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
+          print(command)
+          os.system(command)
 
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 
