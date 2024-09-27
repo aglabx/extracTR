@@ -6,16 +6,16 @@
 # @contact: ad3002@gmail.com
 
 import argparse
-from .core_functions.index_tools import compute_and_get_index
+from .core_functions.index_tools import compute_and_get_index, compute_and_get_index_for_fasta
 from .core_functions.tr_finder import tr_greedy_finder_bidirectional
 
 def run_it():
 
     parser = argparse.ArgumentParser(description="Extract and analyze tandem repeats from raw DNA sequences.")
-    parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.")
-    parser.add_argument("-2", "--fastq2", help="Input file with DNA sequences in FASTQ format.")
+    parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.", default=None)
+    parser.add_argument("-2", "--fastq2", help="Input file with DNA sequences in FASTQ format.", default=None)
     parser.add_argument("-f", "--fasta", help="Input genome fasta file", required=False, default=None)
-    parser.add_argument("-o", "--output", help="Output file with tandem repeats in CSV format.")
+    parser.add_argument("-o", "--output", help="Output file with tandem repeats in CSV format.", required=True)
     parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int, required=False)
     parser.add_argument("-c", "--coverage", help="Coverage to use for aindex.", default=1, type=int, required=False)
     parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
@@ -33,6 +33,7 @@ def run_it():
 
     fastq1 = settings.get("fastq1", None)
     fastq2 = settings.get("fastq2", None)
+    fasta = settings.get("fasta", None)
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1)
     lu = settings.get("lu", 100 * coverage)
@@ -40,7 +41,12 @@ def run_it():
     k = settings.get("k", 23)
 
     ### step 1. Compute aindex for reads
-    kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
+    if fastq1 and fastq2:
+        kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
+    elif fasta:
+        kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu)
+    else:
+        raise Exception("No input data")
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
 
