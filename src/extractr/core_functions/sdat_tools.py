@@ -5,9 +5,7 @@
 # @author: Aleksey Komissarov
 # @contact: ad3002@gmail.com
 
-def get_revcomp(sequence: str) -> str:
-    complement = str.maketrans('ATCGNatcgn~[]', 'TAGCNtagcn~][')
-    return sequence.translate(complement)[::-1]
+from .helpers import get_revcomp
 
 def load_sdat_as_dict(file_name, minimal_tf=100):
     ''' Load kmer tf data from sorted tsv file.
@@ -49,4 +47,3 @@ def compute_abundace_anomaly(sdat, ref_sdat, coverage, ref_coverage=1):
         kmer2abandacy_diff[get_revcomp(kmer)] = (v, kmer, a, b)
     all_rep.sort(reverse=True)
     return all_rep, kmer2abandacy_diff
-    

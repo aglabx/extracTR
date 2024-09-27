@@ -7,9 +7,29 @@
 
 import argparse
 from .core_functions.index_tools import compute_and_get_index
-from .core_functions.tr_finder import tr_greedy_finder_bidirectional, tr_greedy_finder_bidirectional_graph
+from .core_functions.tr_finder import tr_greedy_finder_bidirectional
 
-def run_it(settings):
+def run_it():
+
+    parser = argparse.ArgumentParser(description="Extract and analyze tandem repeats from raw DNA sequences.")
+    parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.")
+    parser.add_argument("-2", "--fastq2", help="Input file with DNA sequences in FASTQ format.")
+    parser.add_argument("-f", "--fasta", help="Input genome fasta file", required=False, default=None)
+    parser.add_argument("-o", "--output", help="Output file with tandem repeats in CSV format.")
+    parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int, required=False)
+    parser.add_argument("-c", "--coverage", help="Coverage to use for aindex.", default=1, type=int, required=False)
+    parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
+    args = parser.parse_args()
+    
+    settings = {
+        "fastq1": args.fastq1,
+        "fastq2": args.fastq2,
+        "fasta": args.fasta,
+        "output": args.output,
+        "threads": 32,
+        "coverage": 1,
+        "k": 23,
+    }
 
     fastq1 = settings.get("fastq1", None)
     fastq2 = settings.get("fastq2", None)
@@ -55,25 +75,6 @@ def run_it(settings):
     ### step 4. Analyze repeat borders
 
     ### step 5. Enrich repeats variants
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract and analyze tandem repeats from raw DNA sequences.")
-    parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.")
-    parser.add_argument("-2", "--fastq2", help="Input file with DNA sequences in FASTQ format.")
-    parser.add_argument("-f", "--fasta", help="Input genome fasta file", required=False, default=None)
-    parser.add_argument("-o", "output", help="Output file with tandem repeats in CSV format.")
-    parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int, required=False)
-    parser.add_argument("-c", "--coverage", help="Coverage to use for aindex.", default=1, type=int, required=False)
-    parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
-    args = parser.parse_args()
-    
-    settings = {
-        "fastq1": args.fastq1,
-        "fastq2": args.fastq2,
-        "fasta": args.fasta,
-        "output": args.output,
-        "threads": 32,
-        "coverage": 1,
-        "k": 23,
-    }
 
-    run_it(settings)
+if __name__ == "__main__":
+    run_it()

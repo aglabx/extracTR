@@ -1,33 +1,44 @@
 import re
-
 from setuptools import find_packages, setup
+import os
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# Читаем requirements.txt
-with open('requirements.txt') as f:
-    requirements = f.read().splitlines()
+# Попытка прочитать requirements.txt, если он существует
+if os.path.exists('requirements.txt'):
+    with open('requirements.txt') as f:
+        requirements = f.read().splitlines()
+else:
+    # Если файл не найден, используем минимальный набор зависимостей
+    requirements = [
+        "tqdm",
+        "intervaltree",
+        "aindex2",
+    ]
 
-version = "0.2.3"
+version = "0.2.10"
 
 setup(
-    name="extractr",
+    name="extracTR",
     version=version,
     packages=find_packages('src'),
     package_dir={'': 'src'},
-    package_data={"": ["README.md"]},
+    package_data={
+        "": ["README.md"],
+        "extractr": ["requirements.txt"],  # Включаем requirements.txt в пакет
+    },
     python_requires=">=3.6",
     include_package_data=True,
     scripts=[],
     license="BSD",
-    url="https://github.com/aglabx/extractr",
+    url="https://github.com/aglabx/extracTR",
     author="Aleksey Komissarov",
     author_email="ad3002@gmail.com",
     description="Extract and analyze satellite DNA from raw sequences.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    install_requires=requirements,  # Используем прочитанные зависимости
+    install_requires=requirements,
     classifiers=[
         "Development Status :: 4 - Beta",
         "Environment :: Console",
@@ -39,7 +50,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'extractr = extractr.extractr:run_it',
+            'extracTR = extractr.extractr:run_it',
         ],
     },
 )
