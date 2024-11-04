@@ -33,13 +33,16 @@ def run_it():
         "k": 23,
         "min_fraction_to_continue": 30,
     }
+    
 
     fastq1 = settings.get("fastq1", None)
     fastq2 = settings.get("fastq2", None)
     fasta = settings.get("fasta", None)
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1)
-    lu = settings.get("lu", 100 * coverage)
+    if settings["lu"] is None:
+        settings["lu"] = 100 * settings["coverage"]
+    lu = settings.get("lu")
     prefix = settings.get("output", "test")
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
