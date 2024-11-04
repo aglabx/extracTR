@@ -65,17 +65,17 @@ Basic usage:
 
 For paired-end FASTQ files:
 ```bash
-extracTR -1 reads_1.fastq -2 reads_2.fastq -o output_prefix
+extracTR -1 reads_1.fastq -2 reads_2.fastq -o output_prefix -c 30
 ```
 
 For single-end FASTQ file:
 ```bash
-extracTR -1 reads.fastq -o output_prefix
+extracTR -1 reads.fastq -o output_prefix -c 30
 ```
 
 For genome assembly in FASTA format:
 ```bash
-extracTR -f genome.fasta -o output_prefix
+extracTR -f genome.fasta -o output_prefix -c 30
 ```
 
 Advanced usage with custom parameters:
@@ -90,8 +90,9 @@ Options:
 - `-f, --fasta`: Input genome assembly in FASTA format
 - `-o, --output`: Prefix for output files
 - `-t, --threads`: Number of threads to use (default: 32)
-- `-c, --coverage`: Coverage to use for indexing (default: 1)
+- `-c, --coverage`: Coverage to use for indexing (required)
 - `-k, --k`: K-mer size to use for indexing (default: 23)
+- `--lu`: Coverage cutoff for k-mers (default: 100 * coverage)
 
 Note: You must provide either FASTQ file(s) or a FASTA file as input.
 
