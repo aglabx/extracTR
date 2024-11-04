@@ -166,7 +166,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
 
     return repeats
 
-def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23):
+def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23, lu=None):
     """
     Extends sequences in both left and right directions except for TRs.
 
@@ -182,7 +182,10 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
         List of repeats with their status and sequences.
     """
 
-    MIN_TF = coverage * 100
+    if not lu:
+        MIN_TF = coverage * 100
+    else:
+        MIN_TF = lu
 
     repeats = []
     rid = 0

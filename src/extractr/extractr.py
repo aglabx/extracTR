@@ -17,7 +17,8 @@ def run_it():
     parser.add_argument("-f", "--fasta", help="Input genome fasta file", required=False, default=None)
     parser.add_argument("-o", "--output", help="Output file with tandem repeats in CSV format.", required=True)
     parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int, required=False)
-    parser.add_argument("-c", "--coverage", help="Coverage to use for aindex.", default=1, type=int, required=False)
+    parser.add_argument("-c", "--coverage", help="Data coverage, set 1 for genome assembly", type=int, required=True)
+    parser.add_argument("--lu", help="Minimal repeat kmers coverage [100 * coverage].", default=None, type=int, required=False)
     parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
     args = parser.parse_args()
     
@@ -28,7 +29,9 @@ def run_it():
         "output": args.output,
         "threads": 32,
         "coverage": 1,
+        "lu": args.lu,
         "k": 23,
+        "min_fraction_to_continue": 30,
     }
 
     fastq1 = settings.get("fastq1", None)
@@ -38,6 +41,7 @@ def run_it():
     coverage = settings.get("coverage", 1)
     lu = settings.get("lu", 100 * coverage)
     prefix = settings.get("output", "test")
+    min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
 
     ### step 1. Compute aindex for reads
@@ -50,7 +54,7 @@ def run_it():
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
 
-    repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23)
+    repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
     all_predicted_trs = []
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
