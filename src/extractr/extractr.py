@@ -78,7 +78,7 @@ def run_it():
 
     ### step 3. Save results to CSV
 
-    output_file = f"{prefix}.csv"
+    output_file = f"{prefix}.fa"
 
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_trs):
