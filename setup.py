@@ -17,7 +17,7 @@ else:
         "aindex2",
     ]
 
-version = "0.2.17"
+version = "0.2.18"
 
 setup(
     name="extracTR",
