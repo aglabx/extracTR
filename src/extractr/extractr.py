@@ -135,7 +135,7 @@ def run_it():
     parser.add_argument("--aindex", help="Prefix for precomputed index", required=False, default=None)
     parser.add_argument("-o", "--output", help="Output file with tandem repeats in CSV format.", required=True)
     parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int, required=False)
-    parser.add_argument("-c", "--coverage", help="Data coverage, set 1 for genome assembly", type=int, required=True)
+    parser.add_argument("-c", "--coverage", help="Data coverage, set 1 for genome assembly", type=float, required=True)
     parser.add_argument("--lu", help="Minimal repeat kmers coverage [100 * coverage].", default=None, type=int, required=False)
     parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
     args = parser.parse_args()
@@ -157,10 +157,12 @@ def run_it():
     fastq2 = settings.get("fastq2", None)
     fasta = settings.get("fasta", None)
     threads = settings.get("threads", 32)
-    coverage = settings.get("coverage", 1)
+    coverage = settings.get("coverage", 1.0)
     if not settings["lu"]:
         settings["lu"] = 100 * settings["coverage"]
     lu = settings.get("lu")
+    if lu <= 1:
+        lu = 2
     prefix = settings.get("output", "test")
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
