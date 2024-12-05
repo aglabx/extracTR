@@ -213,27 +213,27 @@ def run_it():
     ### step 4. Analyze repeat borders
 
     ### step 5. Enrich repeats variants
-    k = 23
-    for i, seq in enumerate(all_predicted_trs):
-        if len(seq) > 10:
-            continue
-        monomer_length = max(2 * k + len(seq), 2 * len(seq))
-        monomer_n = monomer_length // len(seq)
-        consensus = seq * monomer_n
-        print(monomer_length, monomer_n, consensus, len(consensus))
+    # k = 23
+    # for i, seq in enumerate(all_predicted_trs):
+    #     if len(seq) > 10:
+    #         continue
+    #     monomer_length = max(2 * k + len(seq), 2 * len(seq))
+    #     monomer_n = monomer_length // len(seq)
+    #     consensus = seq * monomer_n
+    #     print(monomer_length, monomer_n, consensus, len(consensus))
 
-        finder = KmerPathFinder(kmer2tf)
+    #     finder = KmerPathFinder(kmer2tf)
     
-        # Найти все пути между ACGT и TACG с максимальной длиной 4
-        paths = finder.find_all_sequences(consensus[:k], consensus[-k:], 2 * len(consensus))
+    #     # Найти все пути между ACGT и TACG с максимальной длиной 4
+    #     paths = finder.find_all_sequences(consensus[:k], consensus[-k:], 2 * len(consensus))
     
-        print("Найденные пути:")
-        for path in paths:
-            frequencies = finder.get_path_frequencies(path)
-            print(f"Patj: {' -> '.join(path)}")
-            print(f"Freqs: {frequencies}")
-            print()
-        input("Press Enter to continue...")
+    #     print("Найденные пути:")
+    #     for path in paths:
+    #         frequencies = finder.get_path_frequencies(path)
+    #         print(f"Patj: {' -> '.join(path)}")
+    #         print(f"Freqs: {frequencies}")
+    #         print()
+    #     input("Press Enter to continue...")
 
 
 if __name__ == "__main__":

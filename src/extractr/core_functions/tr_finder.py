@@ -184,6 +184,8 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
 
     if not lu:
         MIN_TF = coverage * 100
+        if MIN_TF <= 1:
+            MIN_TF = 2
     else:
         MIN_TF = lu
 
