@@ -146,10 +146,10 @@ def run_it():
         "fasta": args.fasta,
         "output": args.output,
         "aindex": args.aindex,
-        "threads": 32,
-        "coverage": 1,
+        "threads": args.threads,
+        "coverage": args.coverage,
         "lu": args.lu,
-        "k": 23,
+        "k": args.k,
         "min_fraction_to_continue": 30,
     }
     
@@ -158,7 +158,7 @@ def run_it():
     fasta = settings.get("fasta", None)
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1.0)
-    if not settings["lu"]:
+    if settings["lu"] is None:
         settings["lu"] = 100 * settings["coverage"]
     lu = settings.get("lu")
     if lu <= 1:
@@ -185,6 +185,7 @@ def run_it():
     repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
     all_predicted_trs = []
+    all_predicted_te = []
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
         if status == "tr":
             seq = seq[:-k]
@@ -193,22 +194,31 @@ def run_it():
         elif status == "frag":
             pass
         elif status == "zero":
-            pass
+            all_predicted_te.append(seq)
         elif status == "long":
             pass
         else:
             # print(status, second_status, next_rid, next_i, len(seq), seq)
             raise Exception("Unknown status")
         
-    print(f"Predicted {len(all_predicted_trs)} tandem repeats.")
+    
 
     ### step 3. Save results to CSV
 
-    output_file = f"{prefix}.fa"
+    print(f"Predicted {len(all_predicted_trs)} tandem repeats.")
 
+    output_file = f"{prefix}.fa"
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_trs):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
+
+    print(f"Predicted {len(all_predicted_te)} dispersed elements.")
+
+    output_file = f"{prefix}_te.fa"
+    with open(output_file, "w") as fh:
+        for i, seq in enumerate(all_predicted_te):
+            fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
+
 
     ### step 4. Analyze repeat borders
 
