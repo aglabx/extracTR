@@ -75,7 +75,7 @@ extracTR -1 reads.fastq -o output_prefix -c 30
 
 For genome assembly in FASTA format:
 ```bash
-extracTR -f genome.fasta -o output_prefix -c 30
+extracTR -f genome.fasta -o output_prefix -c 1
 ```
 
 Advanced usage with custom parameters:
