@@ -51,6 +51,7 @@ setup(
     entry_points={
         'console_scripts': [
             'extracTR = extractr.extractr:run_it',
+            'extracTR-benchmark = extractr.benchmark:main',
         ],
     },
 )

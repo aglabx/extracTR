@@ -185,7 +185,7 @@ def run_it(settings):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Benchmark on human T2T data.")
     parser.add_argument("--fastq1", help="Input left reads in FASTQ format.", required=True)
     parser.add_argument("--fastq2", help="Input right reads in FASTQ format.")
@@ -197,7 +197,6 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--coverage", help="Coverage for aindex.", default=30, type=float)
     parser.add_argument("--lu", help="LU for aindex", default=None, type=int)
     parser.add_argument("--hl", help="Heng Li / SRF fasta for comparison")
-    parser.add_argument("--tarean", help="TAREAN fasta for comparison")
     parser.add_argument("--ref-index", help="Prefix for reference aindex (e.g. /path/to/genome.23)", required=True)
     parser.add_argument("--ref-header", help="Path to reference .header file", required=True)
     parser.add_argument("--ref-sdat", help="Path to reference .sdat file", required=True)
@@ -216,7 +215,6 @@ if __name__ == "__main__":
         "index": args.index,
         "fasta": args.fasta,
         "hl": args.hl,
-        "tarean": args.tarean,
         "ref_index": args.ref_index,
         "ref_header": args.ref_header,
         "ref_sdat": args.ref_sdat,
@@ -224,3 +222,7 @@ if __name__ == "__main__":
     }
 
     run_it(settings)
+
+
+if __name__ == "__main__":
+    main()
