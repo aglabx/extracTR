@@ -32,67 +32,67 @@ def naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_contin
         kmer2rid[start_kmer] = rid
         seq = start_kmer
         profile = [tf]
-    while True:
-        kmer = seq[-k:]
-        ori_tf = kmer2tf[kmer]
-        solutions = []
-        prefix = kmer[-k+1:]
-        for i, nucleotide in enumerate(alphabet):
-            ctf = kmer2tf[prefix+nucleotide]
-            if ctf < min_tf_extension:
+        while True:
+            kmer = seq[-k:]
+            ori_tf = kmer2tf[kmer]
+            solutions = []
+            prefix = kmer[-k+1:]
+            for i, nucleotide in enumerate(alphabet):
+                ctf = kmer2tf[prefix+nucleotide]
+                if ctf < min_tf_extension:
+                    continue
+                fr = 100.*ctf//(ori_tf+1)
+                solutions.append((fr, nucleotide))
+
+            solutions.sort()
+
+            if solutions and solutions[-1][0] >= min_fraction_to_continue:
+                seq += "".join(solutions[-1][1])
+                profile.append(solutions)
+                step += 1
+
+                if seq[-k:] in used_kmers and seq[-k:] != start_kmer:
+                    repeated_kmer = seq[-k:]
+                    prev_type = frag2type[repeated_kmer]
+
+                    if len(prev_type) == 2:
+                        prev_type = "F"+prev_type
+
+                    repeats.append((rid, "FRAG", len(seq), start_kmer, seq))
+                    for iii in range(len(seq)-k+1):
+                        kmer_ = seq[iii:iii+k]
+                        kmer2repeat[kmer_].append((rid, iii, prev_type))
+                        kmer2repeat[get_revcomp(kmer_)].append((rid, iii, prev_type))
+                        if not kmer_ in frag2type or frag2type[kmer_] == "FPP":
+                            frag2type[kmer_] = prev_type
+                            frag2type[get_revcomp(kmer_)] = prev_type
+                    rid += 1
+                    break
+                used_kmers.add(seq[-k:])
+                used_kmers.add(get_revcomp(seq[-k:]))
+                frag2type[seq[-k:]] = "PP"
+                frag2type[get_revcomp(seq[-k:])] = "PP"
+                kmer2rid[seq[-k:]] = rid
+                ### TODO: case ABAC => AB
+                if seq[-k:] == start_kmer:
+                    repeats.append((rid, "TR", len(seq[:step]), seq[:step], profile))
+                    for iii in range(len(seq)-k+1):
+                        kmer2repeat[seq[iii:iii+k]].append((rid, iii, "TR"))
+                        kmer2repeat[get_revcomp(seq[iii:iii+k])].append((rid, iii, "TR"))
+                        frag2type[seq[iii:iii+k]] = "TR"
+                        frag2type[get_revcomp(seq[iii:iii+k])] = "TR"
+                    rid += 1
+                    break
+
                 continue
-            fr = 100.*ctf//(ori_tf+1)
-            solutions.append((fr, nucleotide))
-
-        solutions.sort()
-    
-        if solutions and solutions[-1][0] >= min_fraction_to_continue:
-            seq += "".join(solutions[-1][1])
-            profile.append(solutions)
-            step += 1
-
-            if seq[-k:] in used_kmers and seq[-k:] != start_kmer:
-                repeated_kmer = seq[-k:]
-                prev_type = frag2type[repeated_kmer]
-
-                if len(prev_type) == 2:
-                    prev_type = "F"+prev_type
-
-                repeats.append((rid, "FRAG", len(seq), start_kmer, seq))
-                for iii in range(len(seq)-k+1):
-                    kmer_ = seq[iii:iii+k]
-                    kmer2repeat[kmer_].append((rid, iii, prev_type))
-                    kmer2repeat[get_revcomp(kmer_)].append((rid, iii, prev_type))
-                    if not kmer_ in frag2type or frag2type[kmer_] == "FPP":
-                        frag2type[kmer_] = prev_type
-                        frag2type[get_revcomp(kmer_)] = prev_type
-                rid += 1
-                break
-            used_kmers.add(seq[-k:])
-            used_kmers.add(get_revcomp(seq[-k:]))
-            frag2type[seq[-k:]] = "PP"
-            frag2type[get_revcomp(seq[-k:])] = "PP"
-            kmer2rid[seq[-k:]] = rid
-            ### TODO: case ABAC => AB
-            if seq[-k:] == start_kmer:
-                repeats.append((rid, "TR", len(seq[:step]), seq[:step], profile))
-                for iii in range(len(seq)-k+1):
-                    kmer2repeat[seq[iii:iii+k]].append((rid, iii, "TR"))
-                    kmer2repeat[get_revcomp(seq[iii:iii+k])].append((rid, iii, "TR"))
-                    frag2type[seq[iii:iii+k]] = "TR"
-                    frag2type[get_revcomp(seq[iii:iii+k])] = "TR"
-                rid += 1
-                break
-
-            continue
-        repeats.append((rid, "TE", len(seq), seq, solutions))
-        for iii in range(len(seq)-k+1):
-            kmer2repeat[seq[iii:iii+k]].append((rid, iii, "TE"))
-            kmer2repeat[get_revcomp(seq[iii:iii+k])].append((rid, iii, "TE"))
-            frag2type[seq[iii:iii+k]] = "TE"
-            frag2type[get_revcomp(seq[iii:iii+k])] = "TE"
-        rid += 1
-        break
+            repeats.append((rid, "TE", len(seq), seq, solutions))
+            for iii in range(len(seq)-k+1):
+                kmer2repeat[seq[iii:iii+k]].append((rid, iii, "TE"))
+                kmer2repeat[get_revcomp(seq[iii:iii+k])].append((rid, iii, "TE"))
+                frag2type[seq[iii:iii+k]] = "TE"
+                frag2type[get_revcomp(seq[iii:iii+k])] = "TE"
+            rid += 1
+            break
 
     return repeats, kmer2rid, kmer2repeat, frag2type
 
@@ -159,7 +159,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
                 break
             cache[kmer] = (rid, 0, length)
             if length == max_depth:
-                status == "long"
+                status = "long"
                 break
         repeats.append((status, second_status, next_rid, next_i, "".join(seq)))
         rid += 1
@@ -260,6 +260,9 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
             right_prefix = new_kmer[1:]
             right_length += 1
 
+        if right_status is None:
+            right_status = "long"
+
         # If TR detected in right extension, skip left extension
         if right_status == "tr":
             final_status = "tr"
@@ -317,6 +320,9 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                 cache[new_kmer] = (rid, 0, total_length)
                 left_suffix = new_kmer[:-1]
                 left_length += 1
+
+            if left_status is None:
+                left_status = "long"
 
             # Determine overall status
             if left_status == "tr" or right_status == "tr":

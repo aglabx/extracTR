@@ -66,6 +66,22 @@ def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2):
     kmer2tf = aindex.load_aindex(settings, skip_reads=True, skip_aindex=True)
     return kmer2tf, sdat
 
+def get_index(prefix, lu=2):
+    """Load a precomputed aindex without recomputing."""
+    sdat_file = f"{prefix}.23.sdat"
+    sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
+
+    settings = {
+        "index_prefix": f"{prefix}.23",
+        "aindex_prefix": f"{prefix}.23",
+        "reads_file": f"{prefix}.reads",
+        "max_tf": 10000000,
+    }
+
+    kmer2tf = aindex.load_aindex(settings, skip_reads=True, skip_aindex=True)
+    return kmer2tf, sdat
+
+
 def print_kmer_right_read_fragments(kmer, kmer2tf, read_length=310, topk=100, split_springs=True):
   pos = kmer2tf.pos(kmer)
   for p in pos[:topk]:
@@ -93,7 +109,7 @@ def get_kmer_right_read_fragments(kmer, kmer2tf, read_length=310, topk=100, spli
       reads.append(kmer2tf.reads[p:p+read_length].split(b"\n")[0])
   return reads
 
-def print_kmer_left_read_fragments(kmer, kmer2tf, topk=100, read_length=310, k=23, split_springs=True):
+def get_kmer_left_read_fragments(kmer, kmer2tf, topk=100, read_length=310, k=23, split_springs=True):
   pos = kmer2tf.pos(kmer)
   reads = []
   for p in pos[:topk]:

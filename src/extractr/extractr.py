@@ -14,15 +14,16 @@ from typing import Dict, List, Set
 from collections import defaultdict
 
 class KmerPathFinder:
-    def __init__(self, kmer2tf):
+    def __init__(self, kmer2tf, k=23):
         """
         Инициализация искателя путей с использованием индекса kmer2tf.
-        
+
         Args:
             kmer2tf: Индекс, который возвращает частоту k-мера или 0, если его нет
+            k: Длина k-мера (default: 23)
         """
         self.kmer2tf = kmer2tf
-        self.k = 23
+        self.k = k
         
     def _is_valid_kmer(self, kmer: str) -> bool:
         """
@@ -197,9 +198,11 @@ def run_it():
             all_predicted_te.append(seq)
         elif status == "long":
             pass
+        elif status == "extended":
+            all_predicted_te.append(seq)
         else:
             # print(status, second_status, next_rid, next_i, len(seq), seq)
-            raise Exception("Unknown status")
+            raise Exception(f"Unknown status: {status}")
         
     
 
