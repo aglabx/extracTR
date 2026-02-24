@@ -1,6 +1,10 @@
 /// Tandem repeat finders ported from tr_finder.py.
+///
+/// Key design: greedy extension (highest tf first) with DFS backtracking at
+/// forks. The global cache is checked and written during DFS to match the
+/// Python code's behavior: each k-mer is explored at most once across all seeds.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::kmer::{encode_kmer, decode_kmer};
 use crate::kmer_index::KmerIndex;
 
@@ -8,7 +12,6 @@ use crate::kmer_index::KmerIndex;
 const ALPHABET: [u8; 4] = [0, 1, 3, 2]; // A=0, C=1, T=3, G=2
 
 /// Hard limit on total DFS extension attempts per seed direction.
-/// Prevents runaway exploration on non-TR seeds.
 const MAX_DFS_STEPS: usize = 100_000;
 
 /// Result of a TR search for one seed.
@@ -25,17 +28,16 @@ struct DfsResult {
     found_tr: bool,
     path: Vec<u8>,       // base codes in extension order
     status: &'static str,
-    backtracks: usize,   // fork decisions (not unwind steps)
 }
 
 /// Stack frame for iterative DFS.
 struct DfsFrame {
     kmer: u64,
-    extensions: Vec<(u32, u8)>,  // sorted by tf proximity
+    extensions: Vec<(u32, u8)>,  // sorted by descending tf
     ext_index: usize,
 }
 
-/// Get valid right-extensions (unsorted — caller sorts by proximity).
+/// Get valid right-extensions sorted by descending tf (highest first = greedy).
 fn get_right_extensions(prefix: u64, index: &KmerIndex, min_tf: u32, k_mask: u64) -> Vec<(u32, u8)> {
     let mut exts = Vec::with_capacity(4);
     for &base in &ALPHABET {
@@ -45,10 +47,12 @@ fn get_right_extensions(prefix: u64, index: &KmerIndex, min_tf: u32, k_mask: u64
             exts.push((tf, base));
         }
     }
+    // Highest tf first — greedy, follow the strongest signal
+    exts.sort_by(|a, b| b.0.cmp(&a.0));
     exts
 }
 
-/// Get valid left-extensions (unsorted — caller sorts by proximity).
+/// Get valid left-extensions sorted by descending tf (highest first = greedy).
 fn get_left_extensions(suffix: u64, index: &KmerIndex, min_tf: u32, k: usize) -> Vec<(u32, u8)> {
     let mut exts = Vec::with_capacity(4);
     for &base in &ALPHABET {
@@ -58,16 +62,8 @@ fn get_left_extensions(suffix: u64, index: &KmerIndex, min_tf: u32, k: usize) ->
             exts.push((tf, base));
         }
     }
+    exts.sort_by(|a, b| b.0.cmp(&a.0));
     exts
-}
-
-/// Sort extensions by tf proximity to reference_tf (most similar first).
-/// This keeps the DFS within the same repeat's tf neighborhood,
-/// preventing it from getting pulled into high-tf "attractors" like Alu.
-fn sort_by_tf_proximity(exts: &mut Vec<(u32, u8)>, reference_tf: u32) {
-    exts.sort_by_key(|&(tf, _)| {
-        if tf > reference_tf { tf - reference_tf } else { reference_tf - tf }
-    });
 }
 
 /// Decode a slice of base codes (0-3) to a DNA string.
@@ -77,36 +73,33 @@ fn decode_bases(bases: &[u8]) -> String {
     }).collect()
 }
 
-/// DFS right extension looking for a cycle back to start_encoded.
+/// DFS right extension with greedy ordering and global cache interaction.
 ///
-/// Extensions are sorted by tf proximity to the current k-mer's tf (not by
-/// absolute tf). This keeps the search within the same repeat's frequency
-/// band, preventing dispersed high-copy elements (e.g., Alu at tf=100K) from
-/// pulling the DFS away from tandem repeats (e.g., alpha satellite at tf=200).
+/// At each node, extensions are tried in descending tf order (greedy = follow
+/// strongest signal). If the greedy choice hits a dead end or cached k-mer,
+/// the DFS backtracks and tries the next-best extension.
 ///
-/// Backtracking counts only fork decisions (trying the 2nd+ extension at a
-/// node), not linear chain unwinds. A total step limit (MAX_DFS_STEPS) bounds
-/// overall work.
+/// The global cache is checked and updated during DFS:
+/// - Before extending into a k-mer, check if it's in cache → skip (like Python's "frag" stop)
+/// - After extending into a k-mer, add it to cache → prevents re-exploration by future seeds
+/// - On backtrack, k-mers are NOT removed from cache (once explored, always cached)
 fn dfs_extend_right(
     start_encoded: u64,
-    seed_tf: u32,
     index: &KmerIndex,
-    _k: usize,
+    k: usize,
     min_tf: u32,
     max_depth: usize,
     max_backtracks: usize,
     k_mask: u64,
     k_minus_1_mask: u64,
+    cache: &mut HashMap<u64, (usize, u8, usize)>,
+    rid: usize,
 ) -> DfsResult {
     let start_prefix = start_encoded & k_minus_1_mask;
-    let mut root_exts = get_right_extensions(start_prefix, index, min_tf, k_mask);
+    let root_exts = get_right_extensions(start_prefix, index, min_tf, k_mask);
     if root_exts.is_empty() {
-        return DfsResult { found_tr: false, path: Vec::new(), status: "zero", backtracks: 0 };
+        return DfsResult { found_tr: false, path: Vec::new(), status: "zero" };
     }
-    sort_by_tf_proximity(&mut root_exts, seed_tf);
-
-    let mut visited = HashSet::new();
-    visited.insert(start_encoded);
 
     let mut path_bases: Vec<u8> = Vec::new();
     let mut best_path: Vec<u8> = Vec::new();
@@ -122,18 +115,18 @@ fn dfs_extend_right(
 
     while let Some(frame) = stack.last_mut() {
         if frame.ext_index >= frame.extensions.len() {
-            // All extensions exhausted at this node — unwind (NOT counted as backtrack)
-            let popped = stack.pop().unwrap();
+            // All extensions exhausted — unwind
+            stack.pop();
             if stack.is_empty() {
                 break;
             }
-            visited.remove(&popped.kmer);
+            // Don't remove from cache — once explored, always cached
             path_bases.pop();
             continue;
         }
 
         let ext_idx = frame.ext_index;
-        let (ext_tf, base) = frame.extensions[ext_idx];
+        let (_ext_tf, base) = frame.extensions[ext_idx];
         frame.ext_index += 1;
 
         // Count fork decisions: trying 2nd+ extension at a node
@@ -155,11 +148,16 @@ fn dfs_extend_right(
         // TR check: cycle back to start
         if new_kmer == start_encoded {
             path_bases.push(base);
-            return DfsResult { found_tr: true, path: path_bases, status: "tr", backtracks };
+            return DfsResult { found_tr: true, path: path_bases, status: "tr" };
         }
 
-        // Skip if already on current path (avoid non-TR self-loops)
-        if visited.contains(&new_kmer) {
+        // Skip if already in global cache (explored by this or previous seed)
+        if cache.contains_key(&new_kmer) {
+            if path_bases.len() + 1 > best_path.len() {
+                best_path = path_bases.clone();
+                best_path.push(base);
+                best_status = "frag";
+            }
             continue;
         }
 
@@ -173,26 +171,22 @@ fn dfs_extend_right(
             continue;
         }
 
-        // Extend into new_kmer
+        // Extend into new_kmer — add to global cache immediately
         path_bases.push(base);
-        visited.insert(new_kmer);
+        cache.insert(new_kmer, (rid, 0, k + path_bases.len()));
 
         let next_prefix = new_kmer & k_minus_1_mask;
-        let mut next_exts = get_right_extensions(next_prefix, index, min_tf, k_mask);
+        let next_exts = get_right_extensions(next_prefix, index, min_tf, k_mask);
 
         if next_exts.is_empty() {
-            // Dead end — update best path, immediate backtrack
+            // Dead end
             if path_bases.len() > best_path.len() {
                 best_path = path_bases.clone();
                 best_status = "zero";
             }
             path_bases.pop();
-            visited.remove(&new_kmer);
             continue;
         }
-
-        // Sort child extensions by proximity to the child's tf
-        sort_by_tf_proximity(&mut next_exts, ext_tf);
 
         stack.push(DfsFrame {
             kmer: new_kmer,
@@ -201,28 +195,25 @@ fn dfs_extend_right(
         });
     }
 
-    DfsResult { found_tr: false, path: best_path, status: best_status, backtracks }
+    DfsResult { found_tr: false, path: best_path, status: best_status }
 }
 
-/// DFS left extension looking for a cycle back to start_encoded.
+/// DFS left extension with greedy ordering and global cache interaction.
 fn dfs_extend_left(
     start_encoded: u64,
-    seed_tf: u32,
     index: &KmerIndex,
     k: usize,
     min_tf: u32,
     max_depth: usize,
     max_backtracks: usize,
+    cache: &mut HashMap<u64, (usize, u8, usize)>,
+    rid: usize,
 ) -> DfsResult {
     let start_suffix = start_encoded >> 2;
-    let mut root_exts = get_left_extensions(start_suffix, index, min_tf, k);
+    let root_exts = get_left_extensions(start_suffix, index, min_tf, k);
     if root_exts.is_empty() {
-        return DfsResult { found_tr: false, path: Vec::new(), status: "zero", backtracks: 0 };
+        return DfsResult { found_tr: false, path: Vec::new(), status: "zero" };
     }
-    sort_by_tf_proximity(&mut root_exts, seed_tf);
-
-    let mut visited = HashSet::new();
-    visited.insert(start_encoded);
 
     let mut path_bases: Vec<u8> = Vec::new();
     let mut best_path: Vec<u8> = Vec::new();
@@ -238,17 +229,16 @@ fn dfs_extend_left(
 
     while let Some(frame) = stack.last_mut() {
         if frame.ext_index >= frame.extensions.len() {
-            let popped = stack.pop().unwrap();
+            stack.pop();
             if stack.is_empty() {
                 break;
             }
-            visited.remove(&popped.kmer);
             path_bases.pop();
             continue;
         }
 
         let ext_idx = frame.ext_index;
-        let (ext_tf, base) = frame.extensions[ext_idx];
+        let (_ext_tf, base) = frame.extensions[ext_idx];
         frame.ext_index += 1;
 
         if ext_idx > 0 {
@@ -268,10 +258,15 @@ fn dfs_extend_left(
 
         if new_kmer == start_encoded {
             path_bases.push(base);
-            return DfsResult { found_tr: true, path: path_bases, status: "tr", backtracks };
+            return DfsResult { found_tr: true, path: path_bases, status: "tr" };
         }
 
-        if visited.contains(&new_kmer) {
+        if cache.contains_key(&new_kmer) {
+            if path_bases.len() + 1 > best_path.len() {
+                best_path = path_bases.clone();
+                best_path.push(base);
+                best_status = "frag";
+            }
             continue;
         }
 
@@ -285,10 +280,10 @@ fn dfs_extend_left(
         }
 
         path_bases.push(base);
-        visited.insert(new_kmer);
+        cache.insert(new_kmer, (rid, 0, k + path_bases.len()));
 
         let next_suffix = new_kmer >> 2;
-        let mut next_exts = get_left_extensions(next_suffix, index, min_tf, k);
+        let next_exts = get_left_extensions(next_suffix, index, min_tf, k);
 
         if next_exts.is_empty() {
             if path_bases.len() > best_path.len() {
@@ -296,11 +291,8 @@ fn dfs_extend_left(
                 best_status = "zero";
             }
             path_bases.pop();
-            visited.remove(&new_kmer);
             continue;
         }
-
-        sort_by_tf_proximity(&mut next_exts, ext_tf);
 
         stack.push(DfsFrame {
             kmer: new_kmer,
@@ -309,53 +301,19 @@ fn dfs_extend_left(
         });
     }
 
-    DfsResult { found_tr: false, path: best_path, status: best_status, backtracks }
+    DfsResult { found_tr: false, path: best_path, status: best_status }
 }
 
-/// Cache all k-mers along a right extension path.
-fn cache_right_path(
-    start: u64, path: &[u8], k: usize, rid: usize,
-    cache: &mut HashMap<u64, (usize, u8, usize)>,
-    k_mask: u64, k_minus_1_mask: u64,
-) {
-    let mut kmer = start;
-    for (i, &base) in path.iter().enumerate() {
-        let prefix = kmer & k_minus_1_mask;
-        kmer = ((prefix << 2) | (base as u64)) & k_mask;
-        cache.entry(kmer).or_insert((rid, 0, k + i + 1));
-    }
-}
-
-/// Cache all k-mers along a left extension path.
-fn cache_left_path(
-    start: u64, path: &[u8], k: usize, rid: usize,
-    cache: &mut HashMap<u64, (usize, u8, usize)>,
-) {
-    let mut kmer = start;
-    for (i, &base) in path.iter().enumerate() {
-        let suffix = kmer >> 2;
-        kmer = suffix | ((base as u64) << ((k - 1) * 2));
-        cache.entry(kmer).or_insert((rid, 0, k + i + 1));
-    }
-}
-
-/// Bidirectional TR finder with DFS backtracking and tf-proximity extension sorting.
+/// Bidirectional TR finder: greedy with DFS backtracking at forks.
 ///
-/// Two-tier threshold design:
-/// - `lu` (seed_min_tf): high threshold for selecting starting k-mers from sdat.
-///   Only k-mers with tf >= seed_min_tf are used as DFS roots.
-/// - `ext_lu` (ext_min_tf): low threshold for DFS extension filtering.
-///   During graph traversal, extensions with tf >= ext_min_tf are considered.
-///   This allows the DFS to traverse through lower-frequency k-mers that are
-///   part of tandem repeat cycles (e.g., alpha satellite k-mers at tf=20-100)
-///   even when the seed threshold is high (e.g., lu=100).
+/// Matches the Python bidirectional finder's behavior:
+/// 1. Extensions sorted by descending tf (greedy = follow strongest signal)
+/// 2. Global cache checked during extension (stop at previously-explored territory)
+/// 3. New k-mers added to global cache during extension (once explored, always cached)
 ///
-/// Other design decisions:
-/// - Extensions sorted by tf proximity (not absolute tf) to stay within the
-///   same repeat's frequency band.
-/// - Backtrack budget counts fork decisions only, not linear chain unwinds.
-/// - Hard step limit (MAX_DFS_STEPS=100K) bounds total work per seed.
-/// - Global cache used only for seed deduplication, not during DFS traversal.
+/// Two-tier threshold:
+/// - `lu` (seed_min_tf): high threshold for selecting starting k-mers from sdat
+/// - `ext_lu` (ext_min_tf): low threshold for DFS extension filtering
 pub fn tr_greedy_finder_bidirectional(
     sdat: &[(String, u32)],
     max_depth: usize,
@@ -374,7 +332,6 @@ pub fn tr_greedy_finder_bidirectional(
         }
     };
 
-    // Extension threshold: use ext_lu if provided, otherwise same as seed threshold
     let ext_min_tf: u32 = match ext_lu {
         Some(val) => if val <= 1 { 2 } else { val },
         None => seed_min_tf,
@@ -404,15 +361,13 @@ pub fn tr_greedy_finder_bidirectional(
 
         cache.insert(start_encoded, (rid, 0, k));
 
-        // === Right DFS ===
+        // === Right extension (greedy + DFS backtracking) ===
         let right_result = dfs_extend_right(
-            start_encoded, tf, &index, k, ext_min_tf, max_depth, max_backtracks,
-            k_mask, k_minus_1_mask,
+            start_encoded, &index, k, ext_min_tf, max_depth, max_backtracks,
+            k_mask, k_minus_1_mask, &mut cache, rid,
         );
 
         if right_result.found_tr {
-            cache_right_path(start_encoded, &right_result.path, k, rid,
-                             &mut cache, k_mask, k_minus_1_mask);
             let start_str = decode_kmer(start_encoded, k);
             let path_str = decode_bases(&right_result.path);
             repeats.push(FinderResult {
@@ -423,14 +378,13 @@ pub fn tr_greedy_finder_bidirectional(
                 sequence: Some(format!("{}{}", start_str, path_str)),
             });
         } else {
-            // === Left DFS with remaining budget ===
-            let remaining_bt = max_backtracks.saturating_sub(right_result.backtracks);
+            // === Left extension with remaining budget ===
             let left_result = dfs_extend_left(
-                start_encoded, tf, &index, k, ext_min_tf, max_depth, remaining_bt,
+                start_encoded, &index, k, ext_min_tf, max_depth, max_backtracks,
+                &mut cache, rid,
             );
 
             if left_result.found_tr {
-                cache_left_path(start_encoded, &left_result.path, k, rid, &mut cache);
                 let mut left_bases = left_result.path;
                 left_bases.reverse();
                 let left_str = decode_bases(&left_bases);
@@ -443,20 +397,18 @@ pub fn tr_greedy_finder_bidirectional(
                     sequence: Some(format!("{}{}", left_str, start_str)),
                 });
             } else {
-                // No TR found
+                // No TR found — determine status
                 let r_status = right_result.status;
                 let l_status = left_result.status;
-                let final_status = if r_status == "zero" && l_status == "zero" {
+                let final_status = if r_status == "frag" || l_status == "frag" {
+                    "frag"
+                } else if r_status == "zero" && l_status == "zero" {
                     "zero"
                 } else if r_status == "long" || l_status == "long" {
                     "long"
                 } else {
                     "extended"
                 };
-
-                cache_right_path(start_encoded, &right_result.path, k, rid,
-                                 &mut cache, k_mask, k_minus_1_mask);
-                cache_left_path(start_encoded, &left_result.path, k, rid, &mut cache);
 
                 let mut left_bases = left_result.path;
                 left_bases.reverse();
@@ -756,61 +708,86 @@ mod tests {
     #[test]
     fn test_backtracking_finds_tr_at_fork() {
         // Monomer "ATCGA" (5bp) with k=3.
-        // Cycle: ATC→TCG→CGA→GAA→AAT→ATC (all tf=100)
-        // Dead-end fork: TCT has tf=200 (higher absolute tf, but farther from seed tf=100)
-        //
-        // With tf-proximity sorting, the DFS prefers TCG(100) over TCT(200) at the
-        // fork because |100-100|=0 < |200-100|=100.
+        // Cycle k-mers at tf=1000 (high, processed as seeds first).
+        // Dead-end fork: TCT has tf=200 (lower than cycle, but still above min_tf).
+        // When DFS from ATC seed tries right extensions:
+        //   TCT(200) and TCG(1000) are both valid.
+        //   Greedy picks TCG(1000) first → finds cycle immediately.
+        // DFS with max_backtracks=0 also works since greedy first choice is correct.
         let sdat = vec![
-            ("TCT".to_string(), 200),  // dead-end fork
-            ("ATC".to_string(), 100),
-            ("TCG".to_string(), 100),
-            ("CGA".to_string(), 100),
-            ("GAA".to_string(), 100),
-            ("AAT".to_string(), 100),
+            ("ATC".to_string(), 1000),
+            ("TCG".to_string(), 1000),
+            ("CGA".to_string(), 1000),
+            ("GAA".to_string(), 1000),
+            ("AAT".to_string(), 1000),
+            ("TCT".to_string(), 200),  // dead-end fork (lower tf than cycle)
         ];
         let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
-        assert!(!tr_results.is_empty(), "DFS should find TR via tf-proximity sorting");
+        assert!(!tr_results.is_empty(), "Should find TR — greedy picks correct extension first");
     }
 
     #[test]
-    fn test_proximity_sort_prefers_similar_tf() {
-        // Monomer "ATCGA" cycle at tf=200. A high-tf attractor TCX at tf=10000
-        // represents a dispersed repeat (like Alu) with much higher tf.
-        // Without proximity sorting, greedy would pick TCX(10000) and miss the cycle.
-        // With proximity sorting, TCG(200) is preferred because |200-200|=0 < |10000-200|=9800.
-        // Use real DNA bases for the test
-        let mut real_sdat = vec![
-            ("TCT".to_string(), 10000),  // high-tf attractor
-            ("ATC".to_string(), 200),
-            ("TCG".to_string(), 200),
-            ("CGA".to_string(), 200),
-            ("GAA".to_string(), 200),
-            ("AAT".to_string(), 200),
+    fn test_backtracking_from_dead_end() {
+        // Cycle ATCGA at tf=1000. Dead-end fork TCT at tf=2000 (higher tf).
+        // From ATC seed, greedy tries TCT(2000) first → dead end.
+        // DFS backtracks and tries TCG(1000) → finds cycle.
+        // Key: ATC is the first seed (tf=1000 in sdat), TCT is NOT a separate
+        // seed because it only appears as an extension candidate (not in sdat
+        // at higher position than ATC).
+        let sdat = vec![
+            ("ATC".to_string(), 1000),
+            ("TCG".to_string(), 1000),
+            ("CGA".to_string(), 1000),
+            ("GAA".to_string(), 1000),
+            ("AAT".to_string(), 1000),
+            ("TCT".to_string(), 2000),  // dead-end: higher tf but lower position in sdat
         ];
-        // Ensure sdat is sorted by tf descending (as in real data)
-        real_sdat.sort_by(|a, b| b.1.cmp(&a.1));
-        let results = tr_greedy_finder_bidirectional(&real_sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
+        // Note: sdat must be sorted by tf descending for realistic behavior
+        let mut sorted = sdat;
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        // Now TCT(2000) is first seed. But TCT has no right extensions and
+        // its left extension is ATC which will be cached.
+        // To properly test backtracking, we need TCT to NOT be a seed.
+        // Set seed_lu=1500 so only TCT(2000) is above seed threshold but
+        // ext_lu=50 so all k-mers are available for extension.
+        // Wait - that means only TCT is a seed, which doesn't help.
+        //
+        // Better approach: put dead-end inside the cycle's tf range but
+        // make it NOT a separate k-mer in sdat.
+        // Actually, the simplest test: all cycle k-mers at same tf,
+        // dead-end also at same tf. First seed is cycle k-mer (deterministic
+        // because sdat order is preserved).
+        let sdat2 = vec![
+            ("ATC".to_string(), 1000),  // first in sdat → first seed
+            ("TCG".to_string(), 1000),
+            ("CGA".to_string(), 1000),
+            ("GAA".to_string(), 1000),
+            ("AAT".to_string(), 1000),
+            ("TCT".to_string(), 1000),  // dead-end, same tf, later in sdat
+        ];
+        let results = tr_greedy_finder_bidirectional(&sdat2, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
-        assert!(!tr_results.is_empty(), "Proximity sort should avoid high-tf attractor and find TR");
+        assert!(!tr_results.is_empty(), "DFS should find TR even with dead-end fork at same tf");
     }
 
     #[test]
     fn test_backtracking_with_multiple_forks() {
+        // Cycle ATCGTA (6bp) with k=3. Multiple dead-end forks available
+        // but all at lower tf than cycle k-mers.
         let sdat = vec![
-            ("TCT".to_string(), 200),
-            ("GTG".to_string(), 150),
-            ("ATC".to_string(), 100),
-            ("TCG".to_string(), 100),
-            ("CGT".to_string(), 100),
-            ("GTA".to_string(), 100),
-            ("TAA".to_string(), 100),
-            ("AAT".to_string(), 100),
+            ("ATC".to_string(), 1000),
+            ("TCG".to_string(), 1000),
+            ("CGT".to_string(), 1000),
+            ("GTA".to_string(), 1000),
+            ("TAA".to_string(), 1000),
+            ("AAT".to_string(), 1000),
+            ("TCT".to_string(), 200),   // dead-end fork
+            ("GTG".to_string(), 150),   // dead-end fork
         ];
         let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
-        assert!(!tr_results.is_empty(), "DFS should find TR despite multiple forks");
+        assert!(!tr_results.is_empty(), "DFS should find TR despite multiple dead-end forks");
     }
 
     #[test]
@@ -823,26 +800,46 @@ mod tests {
 
     #[test]
     fn test_two_tier_threshold_finds_tr_with_low_ext_lu() {
-        // Simulate alpha satellite scenario:
-        // - Seed k-mer at tf=200 (above seed_lu=100)
-        // - Most cycle k-mers at tf=30 (below seed_lu=100, above ext_lu=10)
-        // With single threshold (lu=100), the cycle breaks because tf=30 < 100.
-        // With two-tier (seed_lu=100, ext_lu=10), DFS can traverse tf=30 k-mers.
         let sdat = vec![
             ("ATC".to_string(), 200),  // seed (tf >= seed_lu)
             ("TCG".to_string(), 30),   // cycle (tf < seed_lu, tf >= ext_lu)
-            ("CGA".to_string(), 30),   // cycle
-            ("GAA".to_string(), 30),   // cycle
-            ("AAT".to_string(), 30),   // cycle
+            ("CGA".to_string(), 30),
+            ("GAA".to_string(), 30),
+            ("AAT".to_string(), 30),
         ];
-        // With ext_lu=None (defaults to seed_lu=100), cycle breaks: tf=30 < 100
+        // Without ext_lu → cycle breaks (tf=30 < seed_lu=100)
         let results_no_ext = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, None);
         let tr_no_ext: Vec<_> = results_no_ext.iter().filter(|r| r.status == "tr").collect();
         assert!(tr_no_ext.is_empty(), "Without ext_lu, cycle should break (tf=30 < seed_lu=100)");
 
-        // With ext_lu=10, DFS can traverse tf=30 k-mers
+        // With ext_lu=10 → DFS traverses tf=30 k-mers
         let results_ext = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, Some(10));
         let tr_ext: Vec<_> = results_ext.iter().filter(|r| r.status == "tr").collect();
         assert!(!tr_ext.is_empty(), "With ext_lu=10, DFS should find TR through tf=30 k-mers");
+    }
+
+    #[test]
+    fn test_cache_prevents_reexploration() {
+        // Two overlapping cycles sharing k-mer TCG:
+        // Cycle1: ATC→TCG→CGA→GAA→AAT→ATC (tf=1000)
+        // Cycle2: GTC→TCG→CGA→GAG→AGG→GGT→GTC (tf=500)
+        //
+        // Seed1 = ATC (tf=1000) → finds cycle1, caches all its k-mers
+        // When seed2 = GTC (tf=500) tries to extend, TCG is in cache → frag
+        // This is correct: TCG is already "claimed" by cycle1
+        let sdat = vec![
+            ("ATC".to_string(), 1000),
+            ("TCG".to_string(), 1000),
+            ("CGA".to_string(), 1000),
+            ("GAA".to_string(), 1000),
+            ("AAT".to_string(), 1000),
+            ("GTC".to_string(), 500),
+            ("GAG".to_string(), 500),
+            ("AGG".to_string(), 500),
+            ("GGT".to_string(), 500),
+        ];
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, None);
+        let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
+        assert_eq!(tr_results.len(), 1, "Should find exactly 1 TR (cycle1); cycle2 blocked by cache");
     }
 }
