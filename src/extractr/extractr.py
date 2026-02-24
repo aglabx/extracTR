@@ -8,21 +8,26 @@
 import argparse
 from .core_functions.index_tools import compute_and_get_index, compute_and_get_index_for_fasta, get_index
 from .core_functions.tr_finder import tr_greedy_finder_bidirectional
+from .core_functions.probe_design import (
+    design_probes, write_probe_fasta, write_probe_tsv,
+    generate_degenerate_consensus,
+)
 from tqdm import tqdm
 
 from typing import Dict, List, Set
 from collections import defaultdict
 
 class KmerPathFinder:
-    def __init__(self, kmer2tf):
+    def __init__(self, kmer2tf, k=23):
         """
         Инициализация искателя путей с использованием индекса kmer2tf.
-        
+
         Args:
             kmer2tf: Индекс, который возвращает частоту k-мера или 0, если его нет
+            k: Длина k-мера (default: 23)
         """
         self.kmer2tf = kmer2tf
-        self.k = 23
+        self.k = k
         
     def _is_valid_kmer(self, kmer: str) -> bool:
         """
@@ -115,14 +120,83 @@ class KmerPathFinder:
     def get_path_frequencies(self, path: List[str]) -> List[int]:
         """
         Получить частоты k-меров для заданного пути.
-        
+
         Args:
             path (List[str]): Путь из k-меров
-            
+
         Returns:
             List[int]: Список частот для каждого k-мера в пути
         """
         return [self.kmer2tf[kmer] for kmer in path]
+
+    def find_monomer_variants(self, monomer: str, max_variants: int = 10, length_tolerance: float = 0.15) -> List[str]:
+        """
+        Find sequence variants of a monomer via DFS cycle search in the de Bruijn graph.
+
+        Looks for cycles of length approximately len(monomer) that start from the
+        same k-mer as the consensus monomer.
+
+        Args:
+            monomer: Consensus monomer sequence
+            max_variants: Maximum number of variants to collect
+            length_tolerance: Fractional tolerance for cycle length (default 15%)
+
+        Returns:
+            List of variant sequences (including the original if found as a cycle)
+        """
+        k = self.k
+        if len(monomer) < k:
+            return [monomer]
+
+        # Build a tandem of monomer to ensure we have valid k-mers at boundaries
+        tandem = monomer + monomer[:k - 1]
+        start_kmer = tandem[:k]
+        if not self._is_valid_kmer(start_kmer):
+            return [monomer]
+
+        target_len = len(monomer)
+        min_len = int(target_len * (1 - length_tolerance))
+        max_len = int(target_len * (1 + length_tolerance))
+
+        variants = set()
+        variants.add(monomer)  # always include original
+
+        def dfs(current_kmer: str, path: List[str], visited: Set[str], seq_len: int):
+            if len(variants) >= max_variants:
+                return
+
+            if seq_len > max_len + k:
+                return
+
+            suffix = current_kmer[1:]
+            for base in 'ACGT':
+                if len(variants) >= max_variants:
+                    return
+                next_kmer = suffix + base
+                if not self._is_valid_kmer(next_kmer):
+                    continue
+
+                new_len = seq_len + 1
+
+                # Check if we completed a cycle back to start
+                if next_kmer == start_kmer and min_len <= new_len <= max_len:
+                    seq = self._get_sequence_from_path(path + [next_kmer])
+                    # Remove the trailing k-1 overlap (cycle closes)
+                    variant = seq[:new_len]
+                    variants.add(variant)
+                    continue
+
+                if next_kmer not in visited and new_len <= max_len:
+                    visited.add(next_kmer)
+                    path.append(next_kmer)
+                    dfs(next_kmer, path, visited, new_len)
+                    path.pop()
+                    visited.remove(next_kmer)
+
+        visited = {start_kmer}
+        dfs(start_kmer, [start_kmer], visited, k)
+
+        return list(variants)
 
 
 
@@ -138,6 +212,12 @@ def run_it():
     parser.add_argument("-c", "--coverage", help="Data coverage, set 1 for genome assembly", type=float, required=True)
     parser.add_argument("--lu", help="Minimal repeat kmers coverage [100 * coverage].", default=None, type=int, required=False)
     parser.add_argument("-k", "--k", help="K-mer size to use for aindex.", default=23, type=int, required=False)
+    parser.add_argument("--probe-length", help="FISH probe length in bp.", default=40, type=int, required=False)
+    parser.add_argument("--top-probes", help="Number of top probes per monomer.", default=3, type=int, required=False)
+    parser.add_argument("--min-gc", help="Minimum GC content for probes.", default=0.35, type=float, required=False)
+    parser.add_argument("--max-gc", help="Maximum GC content for probes.", default=0.65, type=float, required=False)
+    parser.add_argument("--skip-probes", help="Skip FISH probe design step.", action="store_true", default=False)
+    parser.add_argument("--skip-variants", help="Skip variant enrichment step.", action="store_true", default=False)
     args = parser.parse_args()
     
     settings = {
@@ -151,6 +231,12 @@ def run_it():
         "lu": args.lu,
         "k": args.k,
         "min_fraction_to_continue": 30,
+        "probe_length": args.probe_length,
+        "top_probes": args.top_probes,
+        "min_gc": args.min_gc,
+        "max_gc": args.max_gc,
+        "skip_probes": args.skip_probes,
+        "skip_variants": args.skip_variants,
     }
     
     fastq1 = settings.get("fastq1", None)
@@ -160,23 +246,23 @@ def run_it():
     coverage = settings.get("coverage", 1.0)
     if settings["lu"] is None:
         settings["lu"] = int(100 * settings["coverage"])
-    lu = settings.get("lu")
+    lu = int(settings.get("lu"))
     if lu <= 1:
         lu = 2
     prefix = settings.get("output", "test")
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
 
-    ### step 1. Compute aindex for reads
-    if fastq1 and fastq2:
+    ### step 1. Compute aindex for reads (precomputed index takes priority)
+    if settings["aindex"]:
+        kmer2tf, sdat = get_index(settings["aindex"], lu)
+    elif fastq1 and fastq2:
         kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
     elif fastq1 and not fastq2:
         ### SE fastq case
         kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu)
     elif fasta:
         kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu)
-    elif settings["aindex"]:
-        kmer2tf, sdat = get_index(settings["aindex"], lu)
     else:
         raise Exception("No input data")
 
@@ -197,9 +283,11 @@ def run_it():
             all_predicted_te.append(seq)
         elif status == "long":
             pass
+        elif status == "extended":
+            all_predicted_te.append(seq)
         else:
             # print(status, second_status, next_rid, next_i, len(seq), seq)
-            raise Exception("Unknown status")
+            raise Exception(f"Unknown status: {status}")
         
     
 
@@ -222,28 +310,54 @@ def run_it():
 
     ### step 4. Analyze repeat borders
 
-    ### step 5. Enrich repeats variants
-    # k = 23
-    # for i, seq in enumerate(all_predicted_trs):
-    #     if len(seq) > 10:
-    #         continue
-    #     monomer_length = max(2 * k + len(seq), 2 * len(seq))
-    #     monomer_n = monomer_length // len(seq)
-    #     consensus = seq * monomer_n
-    #     print(monomer_length, monomer_n, consensus, len(consensus))
+    ### step 5. Enrich repeat variants
+    all_variants = {}  # monomer_id -> list of variant sequences
+    if not settings["skip_variants"] and all_predicted_trs:
+        print("Step 5: Enriching monomer variants...")
+        finder = KmerPathFinder(kmer2tf, k=k)
+        variants_file = f"{prefix}_variants.fa"
+        with open(variants_file, "w") as fh:
+            for i, monomer in enumerate(tqdm(all_predicted_trs, desc="Variant enrichment")):
+                variants = finder.find_monomer_variants(monomer, max_variants=10)
+                monomer_id = f"monomer_{i}_{len(monomer)}bp"
+                all_variants[monomer_id] = variants
+                for vi, var in enumerate(variants):
+                    fh.write(f">{monomer_id}_var{vi}_{len(var)}bp\n{var}\n")
+        print(f"Variants saved to {variants_file}")
 
-    #     finder = KmerPathFinder(kmer2tf)
-    
-    #     # Найти все пути между ACGT и TACG с максимальной длиной 4
-    #     paths = finder.find_all_sequences(consensus[:k], consensus[-k:], 2 * len(consensus))
-    
-    #     print("Найденные пути:")
-    #     for path in paths:
-    #         frequencies = finder.get_path_frequencies(path)
-    #         print(f"Patj: {' -> '.join(path)}")
-    #         print(f"Freqs: {frequencies}")
-    #         print()
-    #     input("Press Enter to continue...")
+        # Write IUPAC consensus for each monomer's variants
+        consensus_file = f"{prefix}_consensus.fa"
+        with open(consensus_file, "w") as fh:
+            for monomer_id, variants in all_variants.items():
+                if len(variants) > 1:
+                    # Align variants by length (only same-length for degenerate consensus)
+                    by_len = defaultdict(list)
+                    for v in variants:
+                        by_len[len(v)].append(v)
+                    for length, group in by_len.items():
+                        if len(group) > 1:
+                            consensus = generate_degenerate_consensus(group)
+                            fh.write(f">{monomer_id}_consensus_{length}bp_n{len(group)}\n{consensus}\n")
+        print(f"Consensus sequences saved to {consensus_file}")
+
+    ### step 6. FISH probe design
+    if not settings["skip_probes"] and all_predicted_trs:
+        print("Step 6: Designing FISH probes...")
+        probes = design_probes(
+            all_predicted_trs,
+            kmer2tf,
+            k=k,
+            probe_length=settings["probe_length"],
+            min_gc=settings["min_gc"],
+            max_gc=settings["max_gc"],
+            top_n=settings["top_probes"],
+        )
+        probes_fasta = f"{prefix}_probes.fa"
+        probes_tsv = f"{prefix}_probes.tsv"
+        write_probe_fasta(probes, probes_fasta)
+        write_probe_tsv(probes, probes_tsv)
+        print(f"Designed {len(probes)} FISH probes.")
+        print(f"Probes saved to {probes_fasta} and {probes_tsv}")
 
 
 if __name__ == "__main__":

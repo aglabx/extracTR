@@ -17,7 +17,7 @@ else:
         "aindex2",
     ]
 
-version = "0.2.19"
+version = "0.3.0"
 
 setup(
     name="extracTR",
@@ -51,6 +51,7 @@ setup(
     entry_points={
         'console_scripts': [
             'extracTR = extractr.extractr:run_it',
+            'extracTR-benchmark = extractr.benchmark:main',
         ],
     },
 )

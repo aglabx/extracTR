@@ -7,7 +7,7 @@
 
 import argparse
 
-from extractr.core_functions.sdat_tools import load_sdat_as_dict
+from .core_functions.sdat_tools import load_sdat_as_dict
 from .core_functions.index_tools import compute_and_get_index
 import aindex
 from .core_functions.sdat_tools import compute_abundace_anomaly
@@ -16,48 +16,46 @@ from collections import Counter
 from .core_functions.helpers import get_revcomp
 from .core_functions.evaluation import compute_score
 from .core_functions.helpers import sc_iter_fasta_brute
+from tqdm import tqdm
 
 
-def get_ref_aindex(fasta_file, ref_prefix, threads, lu=1):
-    
+def get_ref_aindex(ref_index_prefix, header_file, sdat_file, trf_file, lu=1):
+    """Load reference aindex and ground truth TRF data.
+
+    Args:
+        ref_index_prefix: Prefix for reference aindex files (e.g. /path/to/genome.23)
+        header_file: Path to .header file for reference
+        sdat_file: Path to reference .sdat file
+        trf_file: Path to TRF ground truth file
+        lu: Minimum k-mer frequency cutoff
+    """
     settings = {
-        "index_prefix": "/media/eternus1/data/human/raw_reads/GCF_009914755.1_T2T-CHM13v2.0_genomic.L2.23",
-        "aindex_prefix": "/media/eternus1/data/human/raw_reads/GCF_009914755.1_T2T-CHM13v2.0_genomic.L2.23",
-        "reads_file": "/media/eternus1/data/human/raw_reads/GCF_009914755.1_T2T-CHM13v2.0_genomic.L2.reads",
+        "index_prefix": ref_index_prefix,
+        "aindex_prefix": ref_index_prefix,
+        "reads_file": ref_index_prefix.rsplit('.', 1)[0] + ".reads" if '.' in ref_index_prefix else ref_index_prefix + ".reads",
         "max_tf": 10000000,
     }
 
     ref2tf = aindex.load_aindex(settings, skip_reads=False, skip_aindex=False)
-    ref2tf.load_header("/media/eternus1/data/human/raw_reads/GCF_009914755.1_T2T-CHM13v2.0_genomic.L2.header")
+    ref2tf.load_header(header_file)
 
     chrm2start = {}
     for start, name in ref2tf.headers.items():
         chrm2start[name.split()[0]] = start
 
-    sdat_file = f"{ref_prefix}.sdat"
-    sdat_file = "/media/eternus1/data/human/raw_reads/GCF_009914755.1_T2T-CHM13v2.0_genomic.L2.23"
-
     sdat_ref = load_sdat_as_dict(sdat_file, minimal_tf=lu)
 
-    trf_file = "/media/eternus1/nfs/projects/databases/t2t/trf/GCF_009914755.1_T2T-CHM13v2.0_genomic.10kb.trf"
-    ground_truth = {}
     trf_data = []
     trf_our_format = []
     with open(trf_file) as fh:
-        for line in tqdm(fh):
+        for line in tqdm(fh, desc="Loading TRF data"):
             d = line.strip().split("\t")
             trf_data.append(d)
             array = d[14].upper()
             if len(array) < 100000:
                 continue
-            # for i in range(len(array)-k+1):
-            #   kmer = array[i:i+k]
-            #   ground_truth.setdefault(kmer, {})
-            #   trid = len(trf_data) - 1
-            #   ground_truth[kmer].setdefault(trid, 0)
-            #   ground_truth[kmer][trid] += 1
             trf_our_format.append((d[18].split()[0], int(d[6]), int(d[7]), d[13].upper()))
-    
+
     return ref2tf, chrm2start, sdat_ref, trf_our_format
 
 
@@ -72,11 +70,16 @@ def run_it(settings):
     coverage = settings.get("coverage", 1)
     lu = settings.get("lu", 100 * coverage)
     prefix = settings.get("index", "raw")
-    fasta_file = settings.get("fasta", None)
-    ref_prefix = settings.get("rindex", "ref")
+    ref_index_prefix = settings["ref_index"]
+    header_file = settings["ref_header"]
+    sdat_file = settings["ref_sdat"]
+    trf_file = settings["trf"]
+    k = 23
 
     kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
-    ref2tf, chrm2start, sdat_ref, trf_our_format = get_ref_aindex(fasta_file, ref_prefix, threads, lu=1)
+    ref2tf, chrm2start, sdat_ref, trf_our_format = get_ref_aindex(
+        ref_index_prefix, header_file, sdat_file, trf_file, lu=1
+    )
 
     ### Step 4a. Find kmers underrepresented in the assembly
     ### Step 4b. Find kmers overrepresented in the assembly
@@ -98,8 +101,8 @@ def run_it(settings):
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
 
-    naive_tr_repeats, _, _, _ = naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_continue=30, k=23)
-    repeats = tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23)
+    naive_tr_repeats, _, _, _ = naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_continue=30, k=k)
+    repeats = tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=k)
     print(Counter([x[0] for x in repeats]))
 
     all_predicted_trs_v2 = []
@@ -134,32 +137,31 @@ def run_it(settings):
             if size < MIN_PRED_SIZE:
                 continue
             print(trii, f"Size: {size}", x)
-            # all_predicted_trs.append((size, x[3]))
             all_predicted_trs.append(x[3])
-            # all_predicted_trs.append(get_revcomp(x[3]))
     print(len(all_predicted_trs))
 
-    evaluation1, missed_repeats_fp1, missed_repeats_fn1 = compute_score(all_predicted_trs_v2, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=23)
-    evaluation2, missed_repeats_fp2, missed_repeats_fn2 = compute_score(all_predicted_trs, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=23)
+    evaluation1, missed_repeats_fp1, missed_repeats_fn1 = compute_score(all_predicted_trs_v2, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
+    evaluation2, missed_repeats_fp2, missed_repeats_fn2 = compute_score(all_predicted_trs, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
 
-    srf_file = "/mnt/data/human/raw_reads/srf.fa"
+    srf_file = settings.get("hl")
+    if srf_file:
+        srf_reps = []
+        for header, seq in sc_iter_fasta_brute(srf_file):
+            if isinstance(seq, list):
+                seq = seq[0]
+            if len(seq) > 15000:
+                continue
+            srf_reps.append(seq)
+        print(len(srf_reps))
 
-    srf_reps = []
-    for header, seq in sc_iter_fasta_brute(srf_file):
-        if isinstance(seq, list):
-            seq = seq[0]
-        if len(seq) > 15000:
-            continue
-        srf_reps.append(seq)
-    print(len(srf_reps))
-
-    evaluation_srf, missed_repeats_fp_srf, missed_repeats_fn_srf = compute_score(srf_reps, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=23)
+        evaluation_srf, missed_repeats_fp_srf, missed_repeats_fn_srf = compute_score(srf_reps, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
+    else:
+        evaluation_srf = None
 
     ### step 3. Save evaluation results to CSV
 
     output_file = f"{output}.csv"
 
-    
     evaluation_fields = ["FP", "FN", "TP", "TN", "Accuracy", "P", "R", "F1"]
 
     with open(output_file, "w") as fh:
@@ -172,30 +174,33 @@ def run_it(settings):
         for field in evaluation_fields:
             fh.write(f"{evaluation2[field]},")
         fh.write("\n")
-        for field in evaluation_fields:
-            fh.write(f"{evaluation_srf[field]},")
-        fh.write("\n")
-
+        if evaluation_srf:
+            for field in evaluation_fields:
+                fh.write(f"{evaluation_srf[field]},")
+            fh.write("\n")
 
     found_repeats_fasta = f"{output}.fasta"
     with open(found_repeats_fasta, "w") as fh:
         for i, seq in enumerate(repeats):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
-        
 
-if __name__ == "__main__":
+
+def main():
     parser = argparse.ArgumentParser(description="Benchmark on human T2T data.")
-    parser.add_argument("--fastq1", help="Input left reads in FASTQ format.")
-    parser.add_argument("--fastq2", help="Input right reads in  in FASTQ format.")
-    parser.add_argument("-o", "--output", help="Output prefix for tandem repeats search results.")
-    parser.add_argument("--rindex", help="Index prefix for reference.")
+    parser.add_argument("--fastq1", help="Input left reads in FASTQ format.", required=True)
+    parser.add_argument("--fastq2", help="Input right reads in FASTQ format.")
+    parser.add_argument("-o", "--output", help="Output prefix for benchmark results.", required=True)
+    parser.add_argument("--rindex", help="(deprecated) Use --ref-index instead.")
     parser.add_argument("--index", help="Index prefix for raw reads.")
     parser.add_argument("--fasta", help="Reference data in fasta format.")
-    parser.add_argument("-t", "--threads", help="Number of threads to use.")
-    parser.add_argument("-c", "--coverage", help="Coverage for aindex.")
-    parser.add_argument("--lu", help="LU for aindex")
-    parser.add_argument("--hl", help="Heng Li fasta")
-    parser.add_argument("--tarean", help="TAREAM fasta")
+    parser.add_argument("-t", "--threads", help="Number of threads to use.", default=32, type=int)
+    parser.add_argument("-c", "--coverage", help="Coverage for aindex.", default=30, type=float)
+    parser.add_argument("--lu", help="LU for aindex", default=None, type=int)
+    parser.add_argument("--hl", help="Heng Li / SRF fasta for comparison")
+    parser.add_argument("--ref-index", help="Prefix for reference aindex (e.g. /path/to/genome.23)", required=True)
+    parser.add_argument("--ref-header", help="Path to reference .header file", required=True)
+    parser.add_argument("--ref-sdat", help="Path to reference .sdat file", required=True)
+    parser.add_argument("--trf", help="Path to TRF ground truth file", required=True)
 
     args = parser.parse_args()
 
@@ -210,7 +215,14 @@ if __name__ == "__main__":
         "index": args.index,
         "fasta": args.fasta,
         "hl": args.hl,
-        "tarean": args.tarean,
+        "ref_index": args.ref_index,
+        "ref_header": args.ref_header,
+        "ref_sdat": args.ref_sdat,
+        "trf": args.trf,
     }
 
     run_it(settings)
+
+
+if __name__ == "__main__":
+    main()
