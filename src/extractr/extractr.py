@@ -19,6 +19,16 @@ from tqdm import tqdm
 from typing import Dict, List, Set
 from collections import defaultdict
 
+try:
+    from extractr_rs import (
+        tr_greedy_finder_bidirectional as _rs_bidirectional,
+        find_monomer_variants as _rs_find_monomer_variants,
+        design_probes_for_monomer as _rs_design_probes_for_monomer,
+    )
+    _HAS_RUST = True
+except ImportError:
+    _HAS_RUST = False
+
 
 def check_dependencies(need_index_tools=True):
     """Check that required external tools are available."""
@@ -35,16 +45,18 @@ def check_dependencies(need_index_tools=True):
         sys.exit(1)
 
 class KmerPathFinder:
-    def __init__(self, kmer2tf, k=23):
+    def __init__(self, kmer2tf, k=23, sdat=None):
         """
         Инициализация искателя путей с использованием индекса kmer2tf.
 
         Args:
             kmer2tf: Индекс, который возвращает частоту k-мера или 0, если его нет
             k: Длина k-мера (default: 23)
+            sdat: Optional list of (kmer, tf) tuples for Rust acceleration
         """
         self.kmer2tf = kmer2tf
         self.k = k
+        self.sdat = sdat
         
     def _is_valid_kmer(self, kmer: str) -> bool:
         """
@@ -161,6 +173,8 @@ class KmerPathFinder:
         Returns:
             List of variant sequences (including the original if found as a cycle)
         """
+        if _HAS_RUST and self.sdat is not None:
+            return _rs_find_monomer_variants(monomer, self.sdat, k=self.k, max_variants=max_variants, length_tolerance=length_tolerance)
         k = self.k
         if len(monomer) < k:
             return [monomer]
@@ -307,7 +321,10 @@ def run_it():
     ### step 2. Find tandem repeats using circular path in de bruijn graph
     print("Step 2: Detecting tandem repeats...")
 
-    repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
+    if _HAS_RUST:
+        repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
+    else:
+        repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
     all_predicted_trs = []
     all_predicted_te = []
@@ -347,7 +364,7 @@ def run_it():
     all_variants = {}  # monomer_id -> list of variant sequences
     if not settings["skip_variants"] and all_predicted_trs:
         print("Step 5: Enriching monomer variants...")
-        finder = KmerPathFinder(kmer2tf, k=k)
+        finder = KmerPathFinder(kmer2tf, k=k, sdat=sdat)
         variants_file = f"{prefix}_variants.fa"
         with open(variants_file, "w") as fh:
             for i, monomer in enumerate(tqdm(all_predicted_trs, desc="Variant enrichment")):
@@ -376,15 +393,35 @@ def run_it():
     ### step 6. FISH probe design
     if not settings["skip_probes"] and all_predicted_trs:
         print("Step 6: Designing FISH probes...")
-        probes = design_probes(
-            all_predicted_trs,
-            kmer2tf,
-            k=k,
-            probe_length=settings["probe_length"],
-            min_gc=settings["min_gc"],
-            max_gc=settings["max_gc"],
-            top_n=settings["top_probes"],
-        )
+        if _HAS_RUST:
+            from .core_functions.probe_design import ProbeCandidate
+            all_probes = []
+            for i, monomer in enumerate(all_predicted_trs):
+                monomer_id = f"monomer_{i}_{len(monomer)}bp"
+                raw = _rs_design_probes_for_monomer(
+                    monomer, monomer_id, sdat, k=k,
+                    probe_length=settings["probe_length"],
+                    min_gc=settings["min_gc"], max_gc=settings["max_gc"],
+                    top_n=settings["top_probes"],
+                )
+                for seq, gc, tm, fs, ss, cs, mid, pos in raw:
+                    all_probes.append(ProbeCandidate(
+                        sequence=seq, gc_content=gc, melting_temp=tm,
+                        frequency_score=fs, specificity_score=ss,
+                        composite_score=cs, source_monomer_id=mid, position_in_monomer=pos,
+                    ))
+            all_probes.sort(key=lambda p: p.composite_score, reverse=True)
+            probes = all_probes
+        else:
+            probes = design_probes(
+                all_predicted_trs,
+                kmer2tf,
+                k=k,
+                probe_length=settings["probe_length"],
+                min_gc=settings["min_gc"],
+                max_gc=settings["max_gc"],
+                top_n=settings["top_probes"],
+            )
         probes_fasta = f"{prefix}_probes.fa"
         probes_tsv = f"{prefix}_probes.tsv"
         write_probe_fasta(probes, probes_fasta)

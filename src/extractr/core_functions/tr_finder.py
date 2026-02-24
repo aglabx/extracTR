@@ -185,7 +185,6 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
     Returns:
         List of repeats with their status and sequences.
     """
-
     if lu is None:
         MIN_TF = int(coverage * 100)
         if MIN_TF <= 1:

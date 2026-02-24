@@ -1,0 +1,12 @@
+[package]
+name = "extractr_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "extractr_rs"
+crate-type = ["cdylib"]
+path = "rust/src/lib.rs"
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
