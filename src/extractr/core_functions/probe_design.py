@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 #
 # @created: 13.02.2026
-# @author: Aleksey Komissarov
-# @contact: ad3002@gmail.com
+# @author: Iaroslav Chelombitko
+# @contact: les4sixstm@gmail.com
 
 """FISH probe design for satellite DNA monomers.
 
@@ -53,10 +53,10 @@ def compute_gc_content(seq: str) -> float:
 
 def estimate_melting_temp(seq: str) -> float:
     """Estimate melting temperature using the Wallace rule for short oligos
-    and a basic salt-adjusted formula for longer ones.
+    and the basic salt-adjusted formula for longer ones.
 
     For len <= 14: Tm = 2*(A+T) + 4*(G+C)  (Wallace rule)
-    For len > 14:  Tm = 64.9 + 41*(G+C - 16.4) / N  (basic salt-adjusted)
+    For len > 14:  Tm = 81.5 + 41*(G+C)/N - 675/N  (salt-adjusted, ~50mM Na+)
     """
     if not seq:
         return 0.0
@@ -68,7 +68,7 @@ def estimate_melting_temp(seq: str) -> float:
     if n <= 14:
         return 2 * at + 4 * gc
     else:
-        return 64.9 + 41.0 * (gc - 16.4) / n
+        return 81.5 + 41.0 * gc / n - 675.0 / n
 
 
 def compute_kmer_frequency_profile(
@@ -144,8 +144,8 @@ def design_probes_for_monomer(
     probe_length: int = 40,
     min_gc: float = 0.35,
     max_gc: float = 0.65,
-    min_tm: float = 50.0,
-    max_tm: float = 75.0,
+    min_tm: float = 70.0,
+    max_tm: float = 95.0,
     top_n: int = 3,
 ) -> List[ProbeCandidate]:
     """Design FISH probes for a single monomer.
