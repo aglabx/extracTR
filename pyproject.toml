@@ -2,6 +2,38 @@
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
+[project]
+name = "extracTR"
+version = "0.3.0"
+description = "Extract and analyze satellite DNA from raw sequences."
+readme = "README.md"
+license = {text = "BSD"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Aleksey Komissarov", email = "ad3002@gmail.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "tqdm",
+    "intervaltree",
+    "aindex2",
+]
+
+[project.urls]
+Homepage = "https://github.com/aglabx/extracTR"
+
+[project.scripts]
+extracTR = "extractr.extractr:run_it"
+extracTR-benchmark = "extractr.benchmark:main"
+
 [tool.maturin]
 python-source = "src"
 module-name = "extractr_rs"
