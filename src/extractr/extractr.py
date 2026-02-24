@@ -159,7 +159,7 @@ def run_it():
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1.0)
     if settings["lu"] is None:
-        settings["lu"] = 100 * settings["coverage"]
+        settings["lu"] = int(100 * settings["coverage"])
     lu = settings.get("lu")
     if lu <= 1:
         lu = 2
