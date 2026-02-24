@@ -96,10 +96,15 @@ def naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_contin
 
     return repeats, kmer2rid, kmer2repeat, frag2type
 
-def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23):
+def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=23, lu=None):
     # ### Step 5b. Greedy find the most possible circles in the graph not working
 
-    MIN_TF = coverage * 100
+    if lu is None:
+        MIN_TF = int(coverage * 100)
+        if MIN_TF <= 1:
+            MIN_TF = 2
+    else:
+        MIN_TF = int(lu)
 
     repeats = []
     rid = 0
@@ -129,8 +134,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
                 ctf = kmer2tf[prefix+nucleotide]
                 if ctf < MIN_TF:
                     continue
-                if ctf:
-                    solutions.append((ctf, nucleotide))
+                solutions.append((ctf, nucleotide))
             if not solutions:
                 status = "zero"
                 break
@@ -182,12 +186,12 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
         List of repeats with their status and sequences.
     """
 
-    if not lu:
-        MIN_TF = coverage * 100
+    if lu is None:
+        MIN_TF = int(coverage * 100)
         if MIN_TF <= 1:
             MIN_TF = 2
     else:
-        MIN_TF = lu
+        MIN_TF = int(lu)
 
     repeats = []
     rid = 0
@@ -226,8 +230,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                 ctf = kmer2tf[new_kmer]
                 if ctf < MIN_TF:
                     continue
-                if ctf:
-                    solutions.append((ctf, nucleotide))
+                solutions.append((ctf, nucleotide))
             if not solutions:
                 right_status = "zero"
                 break
@@ -287,8 +290,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
                     ctf = kmer2tf[new_kmer]
                     if ctf < MIN_TF:
                         continue
-                    if ctf:
-                        solutions.append((ctf, nucleotide))
+                    solutions.append((ctf, nucleotide))
                 if not solutions:
                     left_status = "zero"
                     break
