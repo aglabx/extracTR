@@ -364,6 +364,7 @@ def run_it():
     all_predicted_trs = []
     all_predicted_te = []
     status_counts = defaultdict(int)
+    frag_lengths = []
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
         status_counts[status] += 1
         if status == "tr":
@@ -371,7 +372,8 @@ def run_it():
             log.debug("  TR #%d: len=%d seq=%s", len(all_predicted_trs), len(seq), seq[:60])
             all_predicted_trs.append(seq)
         elif status == "frag":
-            pass
+            if seq:
+                frag_lengths.append(len(seq))
         elif status == "zero":
             all_predicted_te.append(seq)
         elif status == "long":
@@ -386,6 +388,35 @@ def run_it():
              status_counts.get("tr", 0), status_counts.get("frag", 0),
              status_counts.get("zero", 0), status_counts.get("long", 0),
              status_counts.get("extended", 0), _elapsed(t0))
+
+    # Log TR length distribution
+    if all_predicted_trs:
+        tr_lengths = sorted([len(s) for s in all_predicted_trs])
+        log.info("  TR lengths: min=%d, median=%d, max=%d",
+                 tr_lengths[0], tr_lengths[len(tr_lengths) // 2], tr_lengths[-1])
+        # Log length histogram buckets
+        buckets = {"<10bp": 0, "10-50bp": 0, "50-200bp": 0, "200-1000bp": 0, ">1000bp": 0}
+        for l in tr_lengths:
+            if l < 10: buckets["<10bp"] += 1
+            elif l < 50: buckets["10-50bp"] += 1
+            elif l < 200: buckets["50-200bp"] += 1
+            elif l < 1000: buckets["200-1000bp"] += 1
+            else: buckets[">1000bp"] += 1
+        log.info("  TR size distribution: %s", ", ".join(f"{k}:{v}" for k, v in buckets.items() if v > 0))
+
+    # Log frag length distribution (diagnostic: are long potential TRs being cut short?)
+    if frag_lengths:
+        frag_lengths.sort()
+        long_frags = [l for l in frag_lengths if l > 50]
+        log.info("  Frag sequences: %d total, %d longer than 50bp (max=%dbp)",
+                 len(frag_lengths), len(long_frags), frag_lengths[-1] if frag_lengths else 0)
+        if long_frags:
+            frag_buckets = {"50-200bp": 0, "200-1000bp": 0, ">1000bp": 0}
+            for l in long_frags:
+                if l < 200: frag_buckets["50-200bp"] += 1
+                elif l < 1000: frag_buckets["200-1000bp"] += 1
+                else: frag_buckets[">1000bp"] += 1
+            log.info("  Long frag distribution: %s", ", ".join(f"{k}:{v}" for k, v in frag_buckets.items() if v > 0))
 
     ### step 3. Save results
     t0 = time.time()
