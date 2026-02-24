@@ -5,22 +5,29 @@
 # @author: Aleksey Komissarov
 # @contact: ad3002@gmail.com
 
+import logging
 import os
 import subprocess
+import time
 from .sdat_tools import load_sdat_as_list
 import aindex
+
+log = logging.getLogger("extracTR")
 
 
 def _run_command(command, debug=False):
     """Run a shell command, suppressing output unless debug is enabled."""
+    log.debug("  Running: %s", command)
+    t0 = time.time()
     if debug:
-        print(command)
         result = subprocess.run(command, shell=True)
     else:
         result = subprocess.run(command, shell=True,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if result.returncode != 0:
         raise RuntimeError(f"Command failed (exit {result.returncode}): {command}")
+    dt = time.time() - t0
+    log.debug("  Command finished in %.1fs", dt)
 
 
 def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
@@ -30,6 +37,7 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
     index_prefix_file = f"{prefix}.23"
 
     if not os.path.isfile(sdat_file) or not os.path.isfile(index_prefix_file):
+      log.info("  Computing aindex (threads=%d)...", threads)
       if fastq1 and fastq2:
           command = f"compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
           _run_command(command, debug=debug)
@@ -39,11 +47,13 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
       elif fastq2 and fastq1 is None:
           command = f"compute_aindex.py -i {fastq2} -t se -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
           _run_command(command, debug=debug)
+    else:
+      log.info("  Index files found, skipping computation")
 
+    log.info("  Loading sdat: %s", sdat_file)
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 
-    ### Step 2. Load raw reads aindex
-
+    log.info("  Loading aindex: %s", f"{prefix}.23")
     settings = {
         "index_prefix": f"{prefix}.23",
         "aindex_prefix": f"{prefix}.23",
@@ -61,13 +71,16 @@ def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2, debug=Fal
     index_prefix_file = f"{prefix}.23"
 
     if not os.path.isfile(sdat_file) or not os.path.isfile(index_prefix_file):
+        log.info("  Computing aindex for FASTA (threads=%d)...", threads)
         command = f"compute_aindex.py -i {fasta_file} -t fasta -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
         _run_command(command, debug=debug)
+    else:
+        log.info("  Index files found, skipping computation")
 
+    log.info("  Loading sdat: %s", sdat_file)
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 
-    ### Step 2. Load raw reads aindex
-
+    log.info("  Loading aindex: %s", f"{prefix}.23")
     settings = {
         "index_prefix": f"{prefix}.23",
         "aindex_prefix": f"{prefix}.23",
@@ -81,8 +94,10 @@ def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2, debug=Fal
 def get_index(prefix, lu=2):
     """Load a precomputed aindex without recomputing."""
     sdat_file = f"{prefix}.23.sdat"
+    log.info("  Loading sdat: %s", sdat_file)
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 
+    log.info("  Loading aindex: %s", f"{prefix}.23")
     settings = {
         "index_prefix": f"{prefix}.23",
         "aindex_prefix": f"{prefix}.23",

@@ -6,8 +6,10 @@
 # @contact: ad3002@gmail.com
 
 import argparse
+import logging
 import shutil
 import sys
+import time
 from .core_functions.index_tools import compute_and_get_index, compute_and_get_index_for_fasta, get_index
 from .core_functions.tr_finder import tr_greedy_finder_bidirectional
 from .core_functions.probe_design import (
@@ -29,6 +31,27 @@ try:
 except ImportError:
     _HAS_RUST = False
 
+log = logging.getLogger("extracTR")
+
+
+def _setup_logging(debug=False):
+    level = logging.DEBUG if debug else logging.INFO
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    log.setLevel(level)
+    log.addHandler(handler)
+
+
+def _elapsed(t0):
+    """Format elapsed time since t0."""
+    dt = time.time() - t0
+    if dt < 60:
+        return f"{dt:.1f}s"
+    return f"{dt / 60:.1f}min"
+
 
 def check_dependencies(need_index_tools=True):
     """Check that required external tools are available."""
@@ -39,9 +62,9 @@ def check_dependencies(need_index_tools=True):
         if not shutil.which("jellyfish"):
             missing.append("  jellyfish — install: conda install -c bioconda jellyfish")
     if missing:
-        print("Missing dependencies:", file=sys.stderr)
+        log.error("Missing dependencies:")
         for m in missing:
-            print(m, file=sys.stderr)
+            log.error(m)
         sys.exit(1)
 
 class KmerPathFinder:
@@ -300,26 +323,38 @@ def run_it():
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
 
+    _setup_logging(debug)
+    pipeline_t0 = time.time()
+
+    log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, lu=%d, backend=%s",
+             k, coverage, lu, "rust" if _HAS_RUST else "python")
+
     # Check dependencies (skip when precomputed index is provided)
     if not settings["aindex"]:
         check_dependencies(need_index_tools=True)
 
     ### step 1. Compute aindex for reads (precomputed index takes priority)
-    print("Step 1: Building k-mer index...")
+    t0 = time.time()
+    log.info("[1/6] Building k-mer index...")
     if settings["aindex"]:
+        log.info("  Loading precomputed index: %s", settings["aindex"])
         kmer2tf, sdat = get_index(settings["aindex"], lu)
     elif fastq1 and fastq2:
+        log.info("  Input: PE reads %s, %s", fastq1, fastq2)
         kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu, debug=debug)
     elif fastq1 and not fastq2:
-        ### SE fastq case
+        log.info("  Input: SE reads %s", fastq1)
         kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu, debug=debug)
     elif fasta:
+        log.info("  Input: FASTA %s", fasta)
         kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu, debug=debug)
     else:
         raise Exception("No input data")
+    log.info("  Loaded %d k-mers with tf >= %d (%s)", len(sdat), lu, _elapsed(t0))
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
-    print("Step 2: Detecting tandem repeats...")
+    t0 = time.time()
+    log.info("[2/6] Detecting tandem repeats (bidirectional greedy search)...")
 
     if _HAS_RUST:
         repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
@@ -328,11 +363,12 @@ def run_it():
 
     all_predicted_trs = []
     all_predicted_te = []
+    status_counts = defaultdict(int)
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
+        status_counts[status] += 1
         if status == "tr":
             seq = seq[:-k]
-            if debug:
-                print(status, second_status, next_rid, next_i, len(seq), seq)
+            log.debug("  TR #%d: len=%d seq=%s", len(all_predicted_trs), len(seq), seq[:60])
             all_predicted_trs.append(seq)
         elif status == "frag":
             pass
@@ -345,38 +381,52 @@ def run_it():
         else:
             raise Exception(f"Unknown status: {status}")
 
-    ### step 3. Save results to CSV
-    print(f"Step 3: Saving results... Found {len(all_predicted_trs)} TRs, {len(all_predicted_te)} dispersed elements.")
+    log.info("  Found %d TRs, %d dispersed elements (tr=%d frag=%d zero=%d long=%d extended=%d) (%s)",
+             len(all_predicted_trs), len(all_predicted_te),
+             status_counts.get("tr", 0), status_counts.get("frag", 0),
+             status_counts.get("zero", 0), status_counts.get("long", 0),
+             status_counts.get("extended", 0), _elapsed(t0))
+
+    ### step 3. Save results
+    t0 = time.time()
+    log.info("[3/6] Saving results...")
 
     output_file = f"{prefix}.fa"
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_trs):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
+    log.info("  TRs → %s (%d sequences)", output_file, len(all_predicted_trs))
 
     output_file = f"{prefix}_te.fa"
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_te):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
+    log.info("  Dispersed → %s (%d sequences, %s)", output_file, len(all_predicted_te), _elapsed(t0))
 
     ### step 4. Analyze repeat borders
+    log.info("[4/6] Repeat border analysis — skipped (not implemented)")
 
     ### step 5. Enrich repeat variants
     all_variants = {}  # monomer_id -> list of variant sequences
     if not settings["skip_variants"] and all_predicted_trs:
-        print("Step 5: Enriching monomer variants...")
+        t0 = time.time()
+        log.info("[5/6] Enriching monomer variants (%d monomers)...", len(all_predicted_trs))
         finder = KmerPathFinder(kmer2tf, k=k, sdat=sdat)
         variants_file = f"{prefix}_variants.fa"
+        total_variants = 0
         with open(variants_file, "w") as fh:
             for i, monomer in enumerate(tqdm(all_predicted_trs, desc="Variant enrichment")):
                 variants = finder.find_monomer_variants(monomer, max_variants=10)
                 monomer_id = f"monomer_{i}_{len(monomer)}bp"
                 all_variants[monomer_id] = variants
+                total_variants += len(variants)
                 for vi, var in enumerate(variants):
                     fh.write(f">{monomer_id}_var{vi}_{len(var)}bp\n{var}\n")
-        print(f"  Variants saved to {variants_file}")
+        log.info("  Variants → %s (%d total variants, %s)", variants_file, total_variants, _elapsed(t0))
 
         # Write IUPAC consensus for each monomer's variants
         consensus_file = f"{prefix}_consensus.fa"
+        n_consensus = 0
         with open(consensus_file, "w") as fh:
             for monomer_id, variants in all_variants.items():
                 if len(variants) > 1:
@@ -388,11 +438,15 @@ def run_it():
                         if len(group) > 1:
                             consensus = generate_degenerate_consensus(group)
                             fh.write(f">{monomer_id}_consensus_{length}bp_n{len(group)}\n{consensus}\n")
-        print(f"  Consensus sequences saved to {consensus_file}")
+                            n_consensus += 1
+        log.info("  Consensus → %s (%d sequences)", consensus_file, n_consensus)
+    else:
+        log.info("[5/6] Variant enrichment — skipped")
 
     ### step 6. FISH probe design
     if not settings["skip_probes"] and all_predicted_trs:
-        print("Step 6: Designing FISH probes...")
+        t0 = time.time()
+        log.info("[6/6] Designing FISH probes (probe_length=%d)...", settings["probe_length"])
         if _HAS_RUST:
             from .core_functions.probe_design import ProbeCandidate
             all_probes = []
@@ -426,9 +480,11 @@ def run_it():
         probes_tsv = f"{prefix}_probes.tsv"
         write_probe_fasta(probes, probes_fasta)
         write_probe_tsv(probes, probes_tsv)
-        print(f"  Designed {len(probes)} FISH probes → {probes_fasta}, {probes_tsv}")
+        log.info("  Probes → %s, %s (%d probes, %s)", probes_fasta, probes_tsv, len(probes), _elapsed(t0))
+    else:
+        log.info("[6/6] FISH probe design — skipped")
 
-    print("Done.")
+    log.info("Done. Total time: %s", _elapsed(pipeline_t0))
 
 
 if __name__ == "__main__":
