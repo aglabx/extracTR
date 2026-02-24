@@ -11,6 +11,7 @@ import aindex
 
 def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
 
+    lu = int(lu)
     sdat_file = f"{prefix}.23.sdat"
     index_prefix_file = f"{prefix}.23"
 
@@ -44,6 +45,7 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
 
 def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2):
 
+    lu = int(lu)
     sdat_file = f"{prefix}.23.sdat"
     index_prefix_file = f"{prefix}.23"
 

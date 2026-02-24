@@ -245,24 +245,24 @@ def run_it():
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1.0)
     if settings["lu"] is None:
-        settings["lu"] = 100 * settings["coverage"]
-    lu = settings.get("lu")
+        settings["lu"] = int(100 * settings["coverage"])
+    lu = int(settings.get("lu"))
     if lu <= 1:
         lu = 2
     prefix = settings.get("output", "test")
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
 
-    ### step 1. Compute aindex for reads
-    if fastq1 and fastq2:
+    ### step 1. Compute aindex for reads (precomputed index takes priority)
+    if settings["aindex"]:
+        kmer2tf, sdat = get_index(settings["aindex"], lu)
+    elif fastq1 and fastq2:
         kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
     elif fastq1 and not fastq2:
         ### SE fastq case
         kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu)
     elif fasta:
         kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu)
-    elif settings["aindex"]:
-        kmer2tf, sdat = get_index(settings["aindex"], lu)
     else:
         raise Exception("No input data")
 
