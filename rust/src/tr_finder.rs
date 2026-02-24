@@ -1,13 +1,13 @@
 /// Tandem repeat finders ported from tr_finder.py.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::kmer::{encode_kmer, decode_kmer};
 use crate::kmer_index::KmerIndex;
 
 /// Bases in order matching Python's alphabet = ["A", "C", "T", "G"]
 const ALPHABET: [u8; 4] = [0, 1, 3, 2]; // A=0, C=1, T=3, G=2
 
-/// Result of a greedy TR search for one seed.
+/// Result of a TR search for one seed.
 pub struct FinderResult {
     pub status: String,
     pub second_status: Option<String>,
@@ -16,7 +16,297 @@ pub struct FinderResult {
     pub sequence: Option<String>,
 }
 
-/// Bidirectional greedy TR finder (mirrors Python lines 173-351).
+/// Result of a DFS extension in one direction.
+struct DfsResult {
+    found_tr: bool,
+    path: Vec<u8>,       // base codes in extension order
+    status: &'static str,
+    backtracks: usize,
+}
+
+/// Stack frame for iterative DFS.
+struct DfsFrame {
+    kmer: u64,
+    extensions: Vec<(u32, u8)>, // sorted by tf desc
+    ext_index: usize,
+}
+
+/// Get valid right-extensions sorted by tf descending.
+fn get_right_extensions(prefix: u64, index: &KmerIndex, min_tf: u32, k_mask: u64) -> Vec<(u32, u8)> {
+    let mut exts = Vec::with_capacity(4);
+    for &base in &ALPHABET {
+        let kmer = ((prefix << 2) | (base as u64)) & k_mask;
+        let tf = index.get(kmer);
+        if tf >= min_tf {
+            exts.push((tf, base));
+        }
+    }
+    exts.sort_by(|a, b| b.0.cmp(&a.0));
+    exts
+}
+
+/// Get valid left-extensions sorted by tf descending.
+fn get_left_extensions(suffix: u64, index: &KmerIndex, min_tf: u32, k: usize) -> Vec<(u32, u8)> {
+    let mut exts = Vec::with_capacity(4);
+    for &base in &ALPHABET {
+        let kmer = suffix | ((base as u64) << ((k - 1) * 2));
+        let tf = index.get(kmer);
+        if tf >= min_tf {
+            exts.push((tf, base));
+        }
+    }
+    exts.sort_by(|a, b| b.0.cmp(&a.0));
+    exts
+}
+
+/// Decode a slice of base codes (0-3) to a DNA string.
+fn decode_bases(bases: &[u8]) -> String {
+    bases.iter().map(|&b| match b {
+        0 => 'A', 1 => 'C', 2 => 'G', 3 => 'T', _ => unreachable!(),
+    }).collect()
+}
+
+/// DFS right extension looking for a cycle back to start_encoded.
+///
+/// Uses iterative DFS with explicit stack. Extensions are tried in tf-descending
+/// order (best first). Backtracking is bounded by max_backtracks.
+fn dfs_extend_right(
+    start_encoded: u64,
+    index: &KmerIndex,
+    _k: usize,
+    min_tf: u32,
+    max_depth: usize,
+    max_backtracks: usize,
+    k_mask: u64,
+    k_minus_1_mask: u64,
+) -> DfsResult {
+    let start_prefix = start_encoded & k_minus_1_mask;
+    let root_exts = get_right_extensions(start_prefix, index, min_tf, k_mask);
+    if root_exts.is_empty() {
+        return DfsResult { found_tr: false, path: Vec::new(), status: "zero", backtracks: 0 };
+    }
+
+    let mut visited = HashSet::new();
+    visited.insert(start_encoded);
+
+    let mut path_bases: Vec<u8> = Vec::new();
+    let mut best_path: Vec<u8> = Vec::new();
+    let mut best_status: &str = "zero";
+    let mut backtracks: usize = 0;
+
+    let mut stack: Vec<DfsFrame> = vec![DfsFrame {
+        kmer: start_encoded,
+        extensions: root_exts,
+        ext_index: 0,
+    }];
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.ext_index >= frame.extensions.len() {
+            // All extensions exhausted at this node — backtrack
+            let popped = stack.pop().unwrap();
+            if stack.is_empty() {
+                // Root exhausted, done
+                break;
+            }
+            visited.remove(&popped.kmer);
+            path_bases.pop();
+            backtracks += 1;
+            if backtracks >= max_backtracks {
+                break;
+            }
+            continue;
+        }
+
+        let (_ctf, base) = frame.extensions[frame.ext_index];
+        frame.ext_index += 1;
+
+        let parent_prefix = frame.kmer & k_minus_1_mask;
+        let new_kmer = ((parent_prefix << 2) | (base as u64)) & k_mask;
+
+        // TR check: cycle back to start
+        if new_kmer == start_encoded {
+            path_bases.push(base);
+            return DfsResult { found_tr: true, path: path_bases, status: "tr", backtracks };
+        }
+
+        // Skip if already on current path (avoid non-TR self-loops)
+        if visited.contains(&new_kmer) {
+            continue;
+        }
+
+        // Max depth check
+        if path_bases.len() + 1 >= max_depth {
+            if path_bases.len() + 1 > best_path.len() {
+                best_path = path_bases.clone();
+                best_path.push(base);
+                best_status = "long";
+            }
+            continue;
+        }
+
+        // Extend into new_kmer
+        path_bases.push(base);
+        visited.insert(new_kmer);
+
+        let next_prefix = new_kmer & k_minus_1_mask;
+        let next_exts = get_right_extensions(next_prefix, index, min_tf, k_mask);
+
+        if next_exts.is_empty() {
+            // Dead end — update best path, immediate backtrack
+            if path_bases.len() > best_path.len() {
+                best_path = path_bases.clone();
+                best_status = "zero";
+            }
+            path_bases.pop();
+            visited.remove(&new_kmer);
+            backtracks += 1;
+            if backtracks >= max_backtracks {
+                break;
+            }
+        } else {
+            stack.push(DfsFrame {
+                kmer: new_kmer,
+                extensions: next_exts,
+                ext_index: 0,
+            });
+        }
+    }
+
+    DfsResult { found_tr: false, path: best_path, status: best_status, backtracks }
+}
+
+/// DFS left extension looking for a cycle back to start_encoded.
+fn dfs_extend_left(
+    start_encoded: u64,
+    index: &KmerIndex,
+    k: usize,
+    min_tf: u32,
+    max_depth: usize,
+    max_backtracks: usize,
+) -> DfsResult {
+    let start_suffix = start_encoded >> 2;
+    let root_exts = get_left_extensions(start_suffix, index, min_tf, k);
+    if root_exts.is_empty() {
+        return DfsResult { found_tr: false, path: Vec::new(), status: "zero", backtracks: 0 };
+    }
+
+    let mut visited = HashSet::new();
+    visited.insert(start_encoded);
+
+    let mut path_bases: Vec<u8> = Vec::new();
+    let mut best_path: Vec<u8> = Vec::new();
+    let mut best_status: &str = "zero";
+    let mut backtracks: usize = 0;
+
+    let mut stack: Vec<DfsFrame> = vec![DfsFrame {
+        kmer: start_encoded,
+        extensions: root_exts,
+        ext_index: 0,
+    }];
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.ext_index >= frame.extensions.len() {
+            let popped = stack.pop().unwrap();
+            if stack.is_empty() {
+                break;
+            }
+            visited.remove(&popped.kmer);
+            path_bases.pop();
+            backtracks += 1;
+            if backtracks >= max_backtracks {
+                break;
+            }
+            continue;
+        }
+
+        let (_ctf, base) = frame.extensions[frame.ext_index];
+        frame.ext_index += 1;
+
+        let parent_suffix = frame.kmer >> 2;
+        let new_kmer = parent_suffix | ((base as u64) << ((k - 1) * 2));
+
+        if new_kmer == start_encoded {
+            path_bases.push(base);
+            return DfsResult { found_tr: true, path: path_bases, status: "tr", backtracks };
+        }
+
+        if visited.contains(&new_kmer) {
+            continue;
+        }
+
+        if path_bases.len() + 1 >= max_depth {
+            if path_bases.len() + 1 > best_path.len() {
+                best_path = path_bases.clone();
+                best_path.push(base);
+                best_status = "long";
+            }
+            continue;
+        }
+
+        path_bases.push(base);
+        visited.insert(new_kmer);
+
+        let next_suffix = new_kmer >> 2;
+        let next_exts = get_left_extensions(next_suffix, index, min_tf, k);
+
+        if next_exts.is_empty() {
+            if path_bases.len() > best_path.len() {
+                best_path = path_bases.clone();
+                best_status = "zero";
+            }
+            path_bases.pop();
+            visited.remove(&new_kmer);
+            backtracks += 1;
+            if backtracks >= max_backtracks {
+                break;
+            }
+        } else {
+            stack.push(DfsFrame {
+                kmer: new_kmer,
+                extensions: next_exts,
+                ext_index: 0,
+            });
+        }
+    }
+
+    DfsResult { found_tr: false, path: best_path, status: best_status, backtracks }
+}
+
+/// Cache all k-mers along a right extension path.
+fn cache_right_path(
+    start: u64, path: &[u8], k: usize, rid: usize,
+    cache: &mut HashMap<u64, (usize, u8, usize)>,
+    k_mask: u64, k_minus_1_mask: u64,
+) {
+    let mut kmer = start;
+    for (i, &base) in path.iter().enumerate() {
+        let prefix = kmer & k_minus_1_mask;
+        kmer = ((prefix << 2) | (base as u64)) & k_mask;
+        cache.entry(kmer).or_insert((rid, 0, k + i + 1));
+    }
+}
+
+/// Cache all k-mers along a left extension path.
+fn cache_left_path(
+    start: u64, path: &[u8], k: usize, rid: usize,
+    cache: &mut HashMap<u64, (usize, u8, usize)>,
+) {
+    let mut kmer = start;
+    for (i, &base) in path.iter().enumerate() {
+        let suffix = kmer >> 2;
+        kmer = suffix | ((base as u64) << ((k - 1) * 2));
+        cache.entry(kmer).or_insert((rid, 0, k + i + 1));
+    }
+}
+
+/// Bidirectional TR finder with DFS backtracking.
+///
+/// For each seed k-mer (from sdat, sorted by tf desc):
+/// 1. Try DFS right extension to find a cycle back to seed
+/// 2. If TR found right → done
+/// 3. Otherwise try DFS left extension with remaining backtrack budget
+/// 4. If TR found left → done
+/// 5. Otherwise report best non-TR path with status zero/long/extended
 pub fn tr_greedy_finder_bidirectional(
     sdat: &[(String, u32)],
     max_depth: usize,
@@ -24,31 +314,28 @@ pub fn tr_greedy_finder_bidirectional(
     _min_fraction_to_continue: u32,
     k: usize,
     lu: Option<u32>,
+    max_backtracks: usize,
 ) -> Vec<FinderResult> {
     let min_tf: u32 = match lu {
-        Some(val) => {
-            let v = val;
-            if v <= 1 { 2 } else { v }
-        }
+        Some(val) => if val <= 1 { 2 } else { val },
         None => {
             let v = (coverage * 100.0) as u32;
             if v <= 1 { 2 } else { v }
         }
     };
 
-    // Build encoded index from sdat
     let index = KmerIndex::from_sdat(sdat, k);
 
-    // Pre-encode sdat k-mers for iteration
     let encoded_sdat: Vec<(u64, u32)> = sdat
         .iter()
         .filter_map(|(s, tf)| encode_kmer(s.as_bytes()).map(|e| (e, *tf)))
         .collect();
 
+    let k_mask = if k == 32 { u64::MAX } else { (1u64 << (k * 2)) - 1 };
+    let k_minus_1_mask = if k - 1 == 32 { u64::MAX } else { (1u64 << ((k - 1) * 2)) - 1 };
+
     let mut repeats: Vec<FinderResult> = Vec::new();
     let mut rid: usize = 0;
-
-    // cache: encoded_kmer -> (rid, strand, length)
     let mut cache: HashMap<u64, (usize, u8, usize)> = HashMap::new();
 
     for &(start_encoded, tf) in &encoded_sdat {
@@ -59,213 +346,83 @@ pub fn tr_greedy_finder_bidirectional(
             continue;
         }
 
-        let mut final_status: Option<&str> = None;
-        let mut second_status: Option<String> = None;
-        let mut next_rid: Option<usize> = None;
-        let mut next_i: Option<usize> = None;
-        let mut total_length = k;
+        cache.insert(start_encoded, (rid, 0, k));
 
-        cache.insert(start_encoded, (rid, 0, total_length));
+        // === Right DFS ===
+        let right_result = dfs_extend_right(
+            start_encoded, &index, k, min_tf, max_depth, max_backtracks,
+            k_mask, k_minus_1_mask,
+        );
 
-        // === Right extension ===
-        // Compute prefix: drop leftmost base of start_kmer (shift left, mask to k-1 bases)
-        let k_minus_1_mask = if k - 1 == 32 {
-            u64::MAX
-        } else {
-            (1u64 << ((k - 1) * 2)) - 1
-        };
-        let mut right_prefix = start_encoded & k_minus_1_mask;
-        let mut right_seq: Vec<u8> = Vec::new(); // stores base codes (0-3)
-        let mut right_length: usize = 0;
-        let mut right_status: Option<&str> = None;
-
-        while right_length < max_depth {
-            // Try all 4 bases, collect valid extensions
-            let mut best_tf: u32 = 0;
-            let mut best_base: u8 = 0;
-            let mut has_solution = false;
-
-            for &base in &ALPHABET {
-                let new_kmer_full = ((right_prefix << 2) | (base as u64))
-                    & if k == 32 { u64::MAX } else { (1u64 << (k * 2)) - 1 };
-                let ctf = index.get(new_kmer_full);
-                if ctf < min_tf {
-                    continue;
-                }
-                if !has_solution || ctf > best_tf {
-                    best_tf = ctf;
-                    best_base = base;
-                    has_solution = true;
-                }
-            }
-
-            if !has_solution {
-                right_status = Some("zero");
-                break;
-            }
-
-            // Python sorts ascending and takes [-1] (max), but solutions.sort(reverse=True) and [0]
-            // is equivalent — we already picked max above.
-            let new_kmer_full = ((right_prefix << 2) | (best_base as u64))
-                & if k == 32 { u64::MAX } else { (1u64 << (k * 2)) - 1 };
-
-            right_seq.push(best_base);
-            total_length += 1;
-
-            if new_kmer_full == start_encoded {
-                right_status = Some("tr");
-                break;
-            }
-
-            if let Some(&(existing_rid, _strand, i)) = cache.get(&new_kmer_full) {
-                // Bug-compatible: `existing_rid not in repeats` where repeats is Vec<tuple>
-                // int-in-list-of-tuples is always False, so second_status is always "self"
-                second_status = Some("self".to_string());
-                next_rid = Some(existing_rid);
-                next_i = Some(i);
-                right_status = Some("frag");
-                break;
-            }
-
-            cache.insert(new_kmer_full, (rid, 0, total_length));
-            right_prefix = new_kmer_full & k_minus_1_mask;
-            right_length += 1;
-        }
-
-        if right_status.is_none() {
-            right_status = Some("long");
-        }
-
-        let full_seq: Option<String>;
-
-        if right_status == Some("tr") {
-            final_status = Some("tr");
-            // Reconstruct: start_kmer + right_seq bases
+        if right_result.found_tr {
+            // Cache k-mers on the cycle path
+            cache_right_path(start_encoded, &right_result.path, k, rid,
+                             &mut cache, k_mask, k_minus_1_mask);
             let start_str = decode_kmer(start_encoded, k);
-            let right_str: String = right_seq
-                .iter()
-                .map(|&b| match b {
-                    0 => 'A',
-                    1 => 'C',
-                    2 => 'G',
-                    3 => 'T',
-                    _ => unreachable!(),
-                })
-                .collect();
-            full_seq = Some(format!("{}{}", start_str, right_str));
+            let path_str = decode_bases(&right_result.path);
+            repeats.push(FinderResult {
+                status: "tr".to_string(),
+                second_status: None,
+                next_rid: None,
+                next_i: None,
+                sequence: Some(format!("{}{}", start_str, path_str)),
+            });
         } else {
-            // === Left extension ===
-            // suffix = start_kmer[:-1] = start_encoded >> 2 (upper k-1 bases)
-            let mut left_suffix = start_encoded >> 2;
-            let mut left_seq: Vec<u8> = Vec::new();
-            let mut left_length: usize = 0;
-            let mut left_status: Option<&str> = None;
+            // === Left DFS with remaining budget ===
+            let remaining_bt = max_backtracks.saturating_sub(right_result.backtracks);
+            let left_result = dfs_extend_left(
+                start_encoded, &index, k, min_tf, max_depth, remaining_bt,
+            );
 
-            while left_length < max_depth {
-                let mut best_tf: u32 = 0;
-                let mut best_base: u8 = 0;
-                let mut has_solution = false;
-
-                for &base in &ALPHABET {
-                    // new_kmer = base + left_suffix (k-1 bases) = base at position k-1 (high bits)
-                    let new_kmer_full =
-                        left_suffix | ((base as u64) << ((k - 1) * 2));
-                    let ctf = index.get(new_kmer_full);
-                    if ctf < min_tf {
-                        continue;
-                    }
-                    if !has_solution || ctf > best_tf {
-                        best_tf = ctf;
-                        best_base = base;
-                        has_solution = true;
-                    }
-                }
-
-                if !has_solution {
-                    left_status = Some("zero");
-                    break;
-                }
-
-                let new_kmer_full =
-                    left_suffix | ((best_base as u64) << ((k - 1) * 2));
-
-                left_seq.push(best_base);
-                total_length += 1;
-
-                if new_kmer_full == start_encoded {
-                    left_status = Some("tr");
-                    break;
-                }
-
-                if let Some(&(existing_rid, _strand, i)) = cache.get(&new_kmer_full) {
-                    second_status = Some("self".to_string());
-                    next_rid = Some(existing_rid);
-                    next_i = Some(i);
-                    left_status = Some("frag");
-                    break;
-                }
-
-                cache.insert(new_kmer_full, (rid, 0, total_length));
-                // new suffix = new_kmer[:-1] = new_kmer >> 2
-                left_suffix = new_kmer_full >> 2;
-                left_length += 1;
-            }
-
-            if left_status.is_none() {
-                left_status = Some("long");
-            }
-
-            // Determine overall status
-            let rs = right_status.unwrap();
-            let ls = left_status.unwrap();
-            if ls == "tr" || rs == "tr" {
-                final_status = Some("tr");
-            } else if ls == "frag" || rs == "frag" {
-                final_status = Some("frag");
-            } else if ls == "zero" && rs == "zero" {
-                final_status = Some("zero");
+            if left_result.found_tr {
+                cache_left_path(start_encoded, &left_result.path, k, rid, &mut cache);
+                let mut left_bases = left_result.path;
+                left_bases.reverse();
+                let left_str = decode_bases(&left_bases);
+                let start_str = decode_kmer(start_encoded, k);
+                repeats.push(FinderResult {
+                    status: "tr".to_string(),
+                    second_status: None,
+                    next_rid: None,
+                    next_i: None,
+                    sequence: Some(format!("{}{}", left_str, start_str)),
+                });
             } else {
-                final_status = Some("extended");
-            }
+                // No TR found — report best non-TR path
+                let r_status = right_result.status;
+                let l_status = left_result.status;
+                let final_status = if r_status == "zero" && l_status == "zero" {
+                    "zero"
+                } else if r_status == "long" || l_status == "long" {
+                    "long"
+                } else {
+                    "extended"
+                };
 
-            // Reconstruct sequence: reversed(left_seq) + start_kmer + right_seq
-            let start_str = decode_kmer(start_encoded, k);
-            let left_str: String = left_seq
-                .iter()
-                .rev()
-                .map(|&b| match b {
-                    0 => 'A',
-                    1 => 'C',
-                    2 => 'G',
-                    3 => 'T',
-                    _ => unreachable!(),
-                })
-                .collect();
-            let right_str: String = right_seq
-                .iter()
-                .map(|&b| match b {
-                    0 => 'A',
-                    1 => 'C',
-                    2 => 'G',
-                    3 => 'T',
-                    _ => unreachable!(),
-                })
-                .collect();
-            full_seq = Some(format!("{}{}{}", left_str, start_str, right_str));
+                // Cache both paths
+                cache_right_path(start_encoded, &right_result.path, k, rid,
+                                 &mut cache, k_mask, k_minus_1_mask);
+                cache_left_path(start_encoded, &left_result.path, k, rid, &mut cache);
+
+                // Build sequence: reversed(left) + start + right
+                let mut left_bases = left_result.path;
+                left_bases.reverse();
+                let left_str = decode_bases(&left_bases);
+                let start_str = decode_kmer(start_encoded, k);
+                let right_str = decode_bases(&right_result.path);
+                let full_seq = format!("{}{}{}", left_str, start_str, right_str);
+                let seq_out = if full_seq.is_empty() { None } else { Some(full_seq) };
+
+                repeats.push(FinderResult {
+                    status: final_status.to_string(),
+                    second_status: None,
+                    next_rid: None,
+                    next_i: None,
+                    sequence: seq_out,
+                });
+            }
         }
 
-        let seq_out = match &full_seq {
-            Some(s) if s.is_empty() => None,
-            other => other.clone(),
-        };
-
-        repeats.push(FinderResult {
-            status: final_status.unwrap_or("zero").to_string(),
-            second_status,
-            next_rid,
-            next_i,
-            sequence: seq_out,
-        });
         rid += 1;
     }
 
@@ -316,7 +473,7 @@ pub fn tr_greedy_finder(
             continue;
         }
 
-        let mut status: Option<&str> = None;
+        let status: Option<&str>;
         let mut second_status: Option<String> = None;
         let mut next_rid: Option<usize> = None;
         let mut next_i: Option<usize> = None;
@@ -382,16 +539,7 @@ pub fn tr_greedy_finder(
 
         // Build sequence: start_kmer + extension bases
         let start_str = decode_kmer(start_encoded, k);
-        let ext_str: String = seq
-            .iter()
-            .map(|&b| match b {
-                0 => 'A',
-                1 => 'C',
-                2 => 'G',
-                3 => 'T',
-                _ => unreachable!(),
-            })
-            .collect();
+        let ext_str = decode_bases(&seq);
         let full_seq = format!("{}{}", start_str, ext_str);
 
         repeats.push(FinderResult {
@@ -535,7 +683,6 @@ mod tests {
     use super::*;
 
     fn make_circular_sdat(monomer: &str, tf: u32, k: usize) -> Vec<(String, u32)> {
-        // Generate all k-mers from a circular monomer, all with the same tf
         let extended = format!("{}{}", monomer, &monomer[..k - 1]);
         let mut sdat = Vec::new();
         for i in 0..monomer.len() {
@@ -547,8 +694,7 @@ mod tests {
     #[test]
     fn test_bidirectional_finds_tr() {
         let sdat = make_circular_sdat("AATGG", 1000, 3);
-        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100));
-        // The first seed should find a TR
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000);
         assert!(!results.is_empty());
         assert_eq!(results[0].status, "tr");
     }
@@ -557,6 +703,61 @@ mod tests {
     fn test_unidirectional_finds_tr() {
         let sdat = make_circular_sdat("AATGG", 1000, 3);
         let results = tr_greedy_finder(&sdat, 30000, 1.0, 30, 3, Some(100));
+        assert!(!results.is_empty());
+        assert_eq!(results[0].status, "tr");
+    }
+
+    #[test]
+    fn test_backtracking_finds_tr_at_fork() {
+        // Monomer "ATCGA" (5bp) with k=3.
+        // Cycle: ATC→TCG→CGA→GAA→AAT→ATC (all tf=100)
+        // Dead-end fork: TCT has tf=200 (higher than TCG=100)
+        // Greedy from ATC would pick TCT and fail.
+        // DFS backtracks from the TCT dead end and finds the cycle via TCG.
+        let sdat = vec![
+            ("TCT".to_string(), 200),  // dead-end fork (highest tf)
+            ("ATC".to_string(), 100),
+            ("TCG".to_string(), 100),
+            ("CGA".to_string(), 100),
+            ("GAA".to_string(), 100),
+            ("AAT".to_string(), 100),
+        ];
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000);
+
+        // TCT is processed first as seed (highest tf). No cycle → not TR.
+        // ATC is processed next. DFS right: tries TCT(200) first → dead end →
+        // backtracks → tries TCG(100) → CGA → GAA → AAT → ATC = TR!
+        let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
+        assert!(!tr_results.is_empty(), "DFS should find TR via backtracking");
+    }
+
+    #[test]
+    fn test_backtracking_with_multiple_forks() {
+        // Monomer "ATCGTA" (6bp) with k=3 and two forks
+        // Cycle: ATC→TCG→CGT→GTA→TAA→AAT→ATC (all tf=100)
+        // Fork 1: TCT tf=200 (dead end)
+        // Fork 2: GTG tf=150 (dead end)
+        let sdat = vec![
+            ("TCT".to_string(), 200),
+            ("GTG".to_string(), 150),
+            ("ATC".to_string(), 100),
+            ("TCG".to_string(), 100),
+            ("CGT".to_string(), 100),
+            ("GTA".to_string(), 100),
+            ("TAA".to_string(), 100),
+            ("AAT".to_string(), 100),
+        ];
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000);
+        let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
+        assert!(!tr_results.is_empty(), "DFS should find TR despite two dead-end forks");
+    }
+
+    #[test]
+    fn test_no_backtrack_needed_for_simple_repeat() {
+        // Simple repeat: no forks, greedy path = correct path
+        let sdat = make_circular_sdat("AATGG", 1000, 3);
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 0);
+        // Even with max_backtracks=0 (pure greedy), should find TR on first try
         assert!(!results.is_empty());
         assert_eq!(results[0].status, "tr");
     }

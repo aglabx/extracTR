@@ -8,10 +8,10 @@ pub mod probe_design;
 
 use kmer_index::KmerIndex;
 
-/// Bidirectional greedy TR finder.
+/// Bidirectional TR finder with DFS backtracking.
 /// Returns Vec<(status, second_status, next_rid, next_i, sequence)>.
 #[pyfunction]
-#[pyo3(signature = (sdat, max_depth=30_000, coverage=30.0, min_fraction_to_continue=30, k=23, lu=None))]
+#[pyo3(signature = (sdat, max_depth=30_000, coverage=30.0, min_fraction_to_continue=30, k=23, lu=None, max_backtracks=1000))]
 fn tr_greedy_finder_bidirectional(
     sdat: Vec<(String, u32)>,
     max_depth: usize,
@@ -19,6 +19,7 @@ fn tr_greedy_finder_bidirectional(
     min_fraction_to_continue: u32,
     k: usize,
     lu: Option<u32>,
+    max_backtracks: usize,
 ) -> PyResult<Vec<(String, Option<String>, Option<usize>, Option<usize>, Option<String>)>> {
     let results = tr_finder::tr_greedy_finder_bidirectional(
         &sdat,
@@ -27,6 +28,7 @@ fn tr_greedy_finder_bidirectional(
         min_fraction_to_continue,
         k,
         lu,
+        max_backtracks,
     );
     Ok(results
         .into_iter()

@@ -285,6 +285,7 @@ def run_it():
     parser.add_argument("--max-gc", help="Maximum GC content for probes.", default=0.65, type=float, required=False)
     parser.add_argument("--skip-probes", help="Skip FISH probe design step.", action="store_true", default=False)
     parser.add_argument("--skip-variants", help="Skip variant enrichment step.", action="store_true", default=False)
+    parser.add_argument("--max-backtracks", help="Max DFS backtracks per seed (Rust backend only).", default=1000, type=int, required=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
     args = parser.parse_args()
     
@@ -305,6 +306,7 @@ def run_it():
         "max_gc": args.max_gc,
         "skip_probes": args.skip_probes,
         "skip_variants": args.skip_variants,
+        "max_backtracks": args.max_backtracks,
         "debug": args.debug,
     }
     
@@ -354,10 +356,13 @@ def run_it():
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
     t0 = time.time()
-    log.info("[2/6] Detecting tandem repeats (bidirectional greedy search)...")
-
+    max_backtracks = settings.get("max_backtracks", 1000)
     if _HAS_RUST:
-        repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
+        log.info("[2/6] Detecting tandem repeats (DFS backtracking, max_bt=%d)...", max_backtracks)
+    else:
+        log.info("[2/6] Detecting tandem repeats (bidirectional greedy search)...")
+    if _HAS_RUST:
+        repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu, max_backtracks=max_backtracks)
     else:
         repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
