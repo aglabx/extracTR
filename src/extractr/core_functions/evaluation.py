@@ -40,7 +40,7 @@ def get_bed_data(all_loci, ref2tf, chrm2start, locus_length_cutoff=10000):
   return data
 
 
-def compute_stats(data, trf_our_format, name="our"):
+def compute_stats(data, trf_our_format, name="our", debug=False):
   ref_IT = {}
   for chrmA, startA, endA, repA in trf_our_format:
     ref_IT.setdefault(chrmA, IntervalTree())
@@ -75,18 +75,19 @@ def compute_stats(data, trf_our_format, name="our"):
     else:
       true_positive_our += 1
 
-
-  print("FP", false_positive)
-  print("FN", false_negative)
-  print("TP", true_positive)
-  print("TN", true_negative)
-  print(f"Accuracy {name} to trf:", true_positive/len(trf_our_format))
-  print(f"Accuracy trf to {name}:", true_positive_our/len(data))
   p = true_positive/(true_positive+false_positive)
   r = true_positive/(true_positive+false_negative)
-  print("P", p)
-  print("R", r)
-  print("F1", 2 * p * r / (p+r))
+
+  if debug:
+    print("FP", false_positive)
+    print("FN", false_negative)
+    print("TP", true_positive)
+    print("TN", true_negative)
+    print(f"Accuracy {name} to trf:", true_positive/len(trf_our_format))
+    print(f"Accuracy trf to {name}:", true_positive_our/len(data))
+    print("P", p)
+    print("R", r)
+    print("F1", 2 * p * r / (p+r))
 
   evaluation = {
     "FP": false_positive,
@@ -105,7 +106,7 @@ def compute_stats(data, trf_our_format, name="our"):
 ### version 2 all kmers
 ### get all ref loci for repeats
 
-def compute_loci(predicted_trs, ref2tf, delta=1000, k=23):
+def compute_loci(predicted_trs, ref2tf, delta=1000, k=23, debug=False):
   ### TODO: replace interval tree with chains
   all_loci = {}
   N = len(predicted_trs)
@@ -114,8 +115,9 @@ def compute_loci(predicted_trs, ref2tf, delta=1000, k=23):
     if len(repeat) < k:
       repeat = (repeat * k)[:2*k]
     pos_tree = IntervalTree()
-    print(f"{rep_id}/{N}", repeat)
-    for i in tqdm(range(len(repeat)-k+1)):
+    if debug:
+      print(f"{rep_id}/{N}", repeat)
+    for i in tqdm(range(len(repeat)-k+1), desc=f"Loci {rep_id}/{N}", disable=not debug):
       key_kmer = repeat[i:i+k]
       if key_kmer in computed_kmers:
         continue
@@ -123,16 +125,18 @@ def compute_loci(predicted_trs, ref2tf, delta=1000, k=23):
       ref_poses = ref2tf.pos(key_kmer)
       for pos in ref_poses:
         pos_tree.addi(pos-delta, pos+delta)
-    print(len(pos_tree))
+    if debug:
+      print(len(pos_tree))
     pos_tree.merge_overlaps()
-    print(len(pos_tree))
+    if debug:
+      print(len(pos_tree))
     all_loci[repeat] = pos_tree
   return all_loci
 
 
 
 
-def compute_loci_chains(predicted_trs, ref2tf, delta=1000, min_array_length=10000, k=23, min_fish_strength=100):
+def compute_loci_chains(predicted_trs, ref2tf, delta=1000, min_array_length=10000, k=23, min_fish_strength=100, debug=False):
   ### TODO: replace interval tree with chains
   all_loci = {}
   N = len(predicted_trs)
@@ -141,8 +145,9 @@ def compute_loci_chains(predicted_trs, ref2tf, delta=1000, min_array_length=1000
     if len(repeat) < k:
       repeat = (repeat * k)[:2*k]
     all_positions = []
-    print(f"{rep_id}/{N}", repeat)
-    for i in tqdm(range(len(repeat)-k+1)):
+    if debug:
+      print(f"{rep_id}/{N}", repeat)
+    for i in tqdm(range(len(repeat)-k+1), desc=f"Chains {rep_id}/{N}", disable=not debug):
       key_kmer = repeat[i:i+k]
       if key_kmer in computed_kmers:
         continue
@@ -175,13 +180,14 @@ def compute_loci_chains(predicted_trs, ref2tf, delta=1000, min_array_length=1000
     pos_tree = IntervalTree()
     for i, j in chains:
       pos_tree.addi(i, j)
-    print(len(pos_tree))
+    if debug:
+      print(len(pos_tree))
     all_loci[repeat] = pos_tree
   return all_loci
 
 
-def compute_score(monomers_dataset, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100,min_fish_strength=100, locus_length_cutoff=10_000, k=23):
-    all_loci_chains = compute_loci_chains(monomers_dataset, ref2tf, delta=delta, min_array_length=min_array_length, k=k, min_fish_strength=min_fish_strength)
+def compute_score(monomers_dataset, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100,min_fish_strength=100, locus_length_cutoff=10_000, k=23, debug=False):
+    all_loci_chains = compute_loci_chains(monomers_dataset, ref2tf, delta=delta, min_array_length=min_array_length, k=k, min_fish_strength=min_fish_strength, debug=debug)
     data = get_bed_data(all_loci_chains, ref2tf, chrm2start, locus_length_cutoff=locus_length_cutoff)
-    evaluation, missed_repeats_fp, missed_repeats_fn = compute_stats(data, trf_our_format)
+    evaluation, missed_repeats_fp, missed_repeats_fn = compute_stats(data, trf_our_format, debug=debug)
     return evaluation, missed_repeats_fp, missed_repeats_fn

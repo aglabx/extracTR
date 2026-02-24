@@ -9,6 +9,7 @@ import argparse
 
 from .core_functions.sdat_tools import load_sdat_as_dict
 from .core_functions.index_tools import compute_and_get_index
+from .extractr import check_dependencies
 import aindex
 from .core_functions.sdat_tools import compute_abundace_anomaly
 from .core_functions.tr_finder import naive_tr_finder, tr_greedy_finder
@@ -74,9 +75,12 @@ def run_it(settings):
     header_file = settings["ref_header"]
     sdat_file = settings["ref_sdat"]
     trf_file = settings["trf"]
+    debug = settings.get("debug", False)
     k = 23
 
-    kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
+    check_dependencies(need_index_tools=True)
+
+    kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu, debug=debug)
     ref2tf, chrm2start, sdat_ref, trf_our_format = get_ref_aindex(
         ref_index_prefix, header_file, sdat_file, trf_file, lu=1
     )
@@ -103,15 +107,18 @@ def run_it(settings):
 
     naive_tr_repeats, _, _, _ = naive_tr_finder(sdat, kmer2tf, min_tf_extension=3000, min_fraction_to_continue=30, k=k)
     repeats = tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_to_continue=30, k=k)
-    print(Counter([x[0] for x in repeats]))
+    if debug:
+        print(Counter([x[0] for x in repeats]))
 
     all_predicted_trs_v2 = []
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
         if status == "tr":
             seq = seq[:-k]
-            print(status, second_status, next_rid, next_i, len(seq), seq)
+            if debug:
+                print(status, second_status, next_rid, next_i, len(seq), seq)
             all_predicted_trs_v2.append(seq)
-    print("Len of all_predicted_trs_v2", len(all_predicted_trs_v2))
+    if debug:
+        print("Len of all_predicted_trs_v2", len(all_predicted_trs_v2))
 
     ### 6. Get dataset for evaluation
 
@@ -136,12 +143,14 @@ def run_it(settings):
             size = kmer2tf[kmer]//30 * len(x[3])
             if size < MIN_PRED_SIZE:
                 continue
-            print(trii, f"Size: {size}", x)
+            if debug:
+                print(trii, f"Size: {size}", x)
             all_predicted_trs.append(x[3])
-    print(len(all_predicted_trs))
+    if debug:
+        print(len(all_predicted_trs))
 
-    evaluation1, missed_repeats_fp1, missed_repeats_fn1 = compute_score(all_predicted_trs_v2, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
-    evaluation2, missed_repeats_fp2, missed_repeats_fn2 = compute_score(all_predicted_trs, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
+    evaluation1, missed_repeats_fp1, missed_repeats_fn1 = compute_score(all_predicted_trs_v2, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k, debug=debug)
+    evaluation2, missed_repeats_fp2, missed_repeats_fn2 = compute_score(all_predicted_trs, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k, debug=debug)
 
     srf_file = settings.get("hl")
     if srf_file:
@@ -152,9 +161,10 @@ def run_it(settings):
             if len(seq) > 15000:
                 continue
             srf_reps.append(seq)
-        print(len(srf_reps))
+        if debug:
+            print(len(srf_reps))
 
-        evaluation_srf, missed_repeats_fp_srf, missed_repeats_fn_srf = compute_score(srf_reps, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k)
+        evaluation_srf, missed_repeats_fp_srf, missed_repeats_fn_srf = compute_score(srf_reps, trf_our_format, chrm2start, ref2tf, delta=30_000, min_array_length=100, min_fish_strength=100, locus_length_cutoff=10_000, k=k, debug=debug)
     else:
         evaluation_srf = None
 
@@ -201,6 +211,7 @@ def main():
     parser.add_argument("--ref-header", help="Path to reference .header file", required=True)
     parser.add_argument("--ref-sdat", help="Path to reference .sdat file", required=True)
     parser.add_argument("--trf", help="Path to TRF ground truth file", required=True)
+    parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
 
     args = parser.parse_args()
 
@@ -219,6 +230,7 @@ def main():
         "ref_header": args.ref_header,
         "ref_sdat": args.ref_sdat,
         "trf": args.trf,
+        "debug": args.debug,
     }
 
     run_it(settings)

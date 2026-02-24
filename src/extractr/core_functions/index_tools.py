@@ -6,28 +6,39 @@
 # @contact: ad3002@gmail.com
 
 import os
+import subprocess
 from .sdat_tools import load_sdat_as_list
 import aindex
 
-def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
+
+def _run_command(command, debug=False):
+    """Run a shell command, suppressing output unless debug is enabled."""
+    if debug:
+        print(command)
+        result = subprocess.run(command, shell=True)
+    else:
+        result = subprocess.run(command, shell=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed (exit {result.returncode}): {command}")
+
+
+def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
 
     lu = int(lu)
     sdat_file = f"{prefix}.23.sdat"
     index_prefix_file = f"{prefix}.23"
 
-    if not os.path.isfile(sdat_file) or  not os.path.isfile(index_prefix_file):
+    if not os.path.isfile(sdat_file) or not os.path.isfile(index_prefix_file):
       if fastq1 and fastq2:
           command = f"compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-          print(command)
-          os.system(command)
+          _run_command(command, debug=debug)
       elif fastq1 and fastq2 is None:
           command = f"compute_aindex.py -i {fastq1} -t se -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-          print(command)
-          os.system(command)
+          _run_command(command, debug=debug)
       elif fastq2 and fastq1 is None:
           command = f"compute_aindex.py -i {fastq2} -t se -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-          print(command)
-          os.system(command)
+          _run_command(command, debug=debug)
 
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 
@@ -43,16 +54,15 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2):
     kmer2tf = aindex.load_aindex(settings, skip_reads=True, skip_aindex=True)
     return kmer2tf, sdat
 
-def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2):
+def compute_and_get_index_for_fasta(fasta_file, prefix, threads, lu=2, debug=False):
 
     lu = int(lu)
     sdat_file = f"{prefix}.23.sdat"
     index_prefix_file = f"{prefix}.23"
 
-    if not os.path.isfile(sdat_file) or  not os.path.isfile(index_prefix_file):
+    if not os.path.isfile(sdat_file) or not os.path.isfile(index_prefix_file):
         command = f"compute_aindex.py -i {fasta_file} -t fasta -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
-        print(command)
-        os.system(command)
+        _run_command(command, debug=debug)
 
     sdat = load_sdat_as_list(sdat_file, minimal_tf=lu)
 

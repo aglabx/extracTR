@@ -6,6 +6,8 @@
 # @contact: ad3002@gmail.com
 
 import argparse
+import shutil
+import sys
 from .core_functions.index_tools import compute_and_get_index, compute_and_get_index_for_fasta, get_index
 from .core_functions.tr_finder import tr_greedy_finder_bidirectional
 from .core_functions.probe_design import (
@@ -16,6 +18,21 @@ from tqdm import tqdm
 
 from typing import Dict, List, Set
 from collections import defaultdict
+
+
+def check_dependencies(need_index_tools=True):
+    """Check that required external tools are available."""
+    missing = []
+    if need_index_tools:
+        if not shutil.which("compute_aindex.py"):
+            missing.append("  compute_aindex.py — install: pip install aindex2")
+        if not shutil.which("jellyfish"):
+            missing.append("  jellyfish — install: conda install -c bioconda jellyfish")
+    if missing:
+        print("Missing dependencies:", file=sys.stderr)
+        for m in missing:
+            print(m, file=sys.stderr)
+        sys.exit(1)
 
 class KmerPathFinder:
     def __init__(self, kmer2tf, k=23):
@@ -131,7 +148,7 @@ class KmerPathFinder:
 
     def find_monomer_variants(self, monomer: str, max_variants: int = 10, length_tolerance: float = 0.15) -> List[str]:
         """
-        Find sequence variants of a monomer via DFS cycle search in the de Bruijn graph.
+        Find sequence variants of a monomer via iterative DFS cycle search in the de Bruijn graph.
 
         Looks for cycles of length approximately len(monomer) that start from the
         same k-mer as the consensus monomer.
@@ -161,18 +178,22 @@ class KmerPathFinder:
         variants = set()
         variants.add(monomer)  # always include original
 
-        def dfs(current_kmer: str, path: List[str], visited: Set[str], seq_len: int):
-            if len(variants) >= max_variants:
-                return
+        # Iterative DFS with explicit stack
+        # Stack items: (current_kmer, seq_len, base_index)
+        # base_index tracks which of ACGT we try next when we revisit this frame
+        stack = [(start_kmer, k, 0)]
+        path = [start_kmer]
+        visited = {start_kmer}
 
-            if seq_len > max_len + k:
-                return
+        while stack and len(variants) < max_variants:
+            current_kmer, seq_len, base_idx = stack[-1]
 
-            suffix = current_kmer[1:]
-            for base in 'ACGT':
+            found_next = False
+            for bi in range(base_idx, 4):
                 if len(variants) >= max_variants:
-                    return
-                next_kmer = suffix + base
+                    break
+                base = 'ACGT'[bi]
+                next_kmer = current_kmer[1:] + base
                 if not self._is_valid_kmer(next_kmer):
                     continue
 
@@ -181,20 +202,29 @@ class KmerPathFinder:
                 # Check if we completed a cycle back to start
                 if next_kmer == start_kmer and min_len <= new_len <= max_len:
                     seq = self._get_sequence_from_path(path + [next_kmer])
-                    # Remove the trailing k-1 overlap (cycle closes)
                     variant = seq[:new_len]
                     variants.add(variant)
-                    continue
+                    # Update base_index so we resume from next base
+                    stack[-1] = (current_kmer, seq_len, bi + 1)
+                    found_next = True
+                    break
 
                 if next_kmer not in visited and new_len <= max_len:
+                    # Save resume point: next time revisit this frame, start from bi+1
+                    stack[-1] = (current_kmer, seq_len, bi + 1)
+                    # Push new frame
                     visited.add(next_kmer)
                     path.append(next_kmer)
-                    dfs(next_kmer, path, visited, new_len)
-                    path.pop()
-                    visited.remove(next_kmer)
+                    stack.append((next_kmer, new_len, 0))
+                    found_next = True
+                    break
 
-        visited = {start_kmer}
-        dfs(start_kmer, [start_kmer], visited, k)
+            if not found_next:
+                # Backtrack
+                stack.pop()
+                if path:
+                    removed = path.pop()
+                    visited.discard(removed)
 
         return list(variants)
 
@@ -218,6 +248,7 @@ def run_it():
     parser.add_argument("--max-gc", help="Maximum GC content for probes.", default=0.65, type=float, required=False)
     parser.add_argument("--skip-probes", help="Skip FISH probe design step.", action="store_true", default=False)
     parser.add_argument("--skip-variants", help="Skip variant enrichment step.", action="store_true", default=False)
+    parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
     args = parser.parse_args()
     
     settings = {
@@ -237,6 +268,7 @@ def run_it():
         "max_gc": args.max_gc,
         "skip_probes": args.skip_probes,
         "skip_variants": args.skip_variants,
+        "debug": args.debug,
     }
     
     fastq1 = settings.get("fastq1", None)
@@ -244,6 +276,7 @@ def run_it():
     fasta = settings.get("fasta", None)
     threads = settings.get("threads", 32)
     coverage = settings.get("coverage", 1.0)
+    debug = settings.get("debug", False)
     if settings["lu"] is None:
         settings["lu"] = int(100 * settings["coverage"])
     lu = int(settings.get("lu"))
@@ -253,20 +286,26 @@ def run_it():
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
 
+    # Check dependencies (skip when precomputed index is provided)
+    if not settings["aindex"]:
+        check_dependencies(need_index_tools=True)
+
     ### step 1. Compute aindex for reads (precomputed index takes priority)
+    print("Step 1: Building k-mer index...")
     if settings["aindex"]:
         kmer2tf, sdat = get_index(settings["aindex"], lu)
     elif fastq1 and fastq2:
-        kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu)
+        kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu, debug=debug)
     elif fastq1 and not fastq2:
         ### SE fastq case
-        kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu)
+        kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu, debug=debug)
     elif fasta:
-        kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu)
+        kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu, debug=debug)
     else:
         raise Exception("No input data")
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
+    print("Step 2: Detecting tandem repeats...")
 
     repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
@@ -275,7 +314,8 @@ def run_it():
     for i, (status, second_status, next_rid, next_i, seq) in enumerate(repeats):
         if status == "tr":
             seq = seq[:-k]
-            # print(status, second_status, next_rid, next_i, len(seq), seq)
+            if debug:
+                print(status, second_status, next_rid, next_i, len(seq), seq)
             all_predicted_trs.append(seq)
         elif status == "frag":
             pass
@@ -286,27 +326,20 @@ def run_it():
         elif status == "extended":
             all_predicted_te.append(seq)
         else:
-            # print(status, second_status, next_rid, next_i, len(seq), seq)
             raise Exception(f"Unknown status: {status}")
-        
-    
 
     ### step 3. Save results to CSV
-
-    print(f"Predicted {len(all_predicted_trs)} tandem repeats.")
+    print(f"Step 3: Saving results... Found {len(all_predicted_trs)} TRs, {len(all_predicted_te)} dispersed elements.")
 
     output_file = f"{prefix}.fa"
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_trs):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
 
-    print(f"Predicted {len(all_predicted_te)} dispersed elements.")
-
     output_file = f"{prefix}_te.fa"
     with open(output_file, "w") as fh:
         for i, seq in enumerate(all_predicted_te):
             fh.write(f">{i}_{len(seq)}bp\n{seq}\n")
-
 
     ### step 4. Analyze repeat borders
 
@@ -323,7 +356,7 @@ def run_it():
                 all_variants[monomer_id] = variants
                 for vi, var in enumerate(variants):
                     fh.write(f">{monomer_id}_var{vi}_{len(var)}bp\n{var}\n")
-        print(f"Variants saved to {variants_file}")
+        print(f"  Variants saved to {variants_file}")
 
         # Write IUPAC consensus for each monomer's variants
         consensus_file = f"{prefix}_consensus.fa"
@@ -338,7 +371,7 @@ def run_it():
                         if len(group) > 1:
                             consensus = generate_degenerate_consensus(group)
                             fh.write(f">{monomer_id}_consensus_{length}bp_n{len(group)}\n{consensus}\n")
-        print(f"Consensus sequences saved to {consensus_file}")
+        print(f"  Consensus sequences saved to {consensus_file}")
 
     ### step 6. FISH probe design
     if not settings["skip_probes"] and all_predicted_trs:
@@ -356,8 +389,9 @@ def run_it():
         probes_tsv = f"{prefix}_probes.tsv"
         write_probe_fasta(probes, probes_fasta)
         write_probe_tsv(probes, probes_tsv)
-        print(f"Designed {len(probes)} FISH probes.")
-        print(f"Probes saved to {probes_fasta} and {probes_tsv}")
+        print(f"  Designed {len(probes)} FISH probes → {probes_fasta}, {probes_tsv}")
+
+    print("Done.")
 
 
 if __name__ == "__main__":

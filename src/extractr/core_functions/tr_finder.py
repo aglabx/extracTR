@@ -113,7 +113,7 @@ def tr_greedy_finder(sdat, kmer2tf, max_depth=30_000, coverage=30, min_fraction_
     rid = 0
     cache = {}
     # print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
-    for (start_kmer, tf) in tqdm(sdat):
+    for (start_kmer, tf) in tqdm(sdat, desc="Greedy TR search"):
         if tf < MIN_TF:
             break
         if start_kmer in cache:
@@ -200,7 +200,7 @@ def tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=30,
     cache = {}
     # print("Expected iterations:", len([x for x in sdat if x[1] > MIN_TF]))
 
-    for (start_kmer, tf) in tqdm(sdat):
+    for (start_kmer, tf) in tqdm(sdat, desc="Bidirectional TR search"):
         if tf < MIN_TF:
             break
         if start_kmer in cache:
