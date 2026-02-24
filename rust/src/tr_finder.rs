@@ -341,10 +341,18 @@ fn cache_left_path(
 
 /// Bidirectional TR finder with DFS backtracking and tf-proximity extension sorting.
 ///
-/// Key design decisions:
+/// Two-tier threshold design:
+/// - `lu` (seed_min_tf): high threshold for selecting starting k-mers from sdat.
+///   Only k-mers with tf >= seed_min_tf are used as DFS roots.
+/// - `ext_lu` (ext_min_tf): low threshold for DFS extension filtering.
+///   During graph traversal, extensions with tf >= ext_min_tf are considered.
+///   This allows the DFS to traverse through lower-frequency k-mers that are
+///   part of tandem repeat cycles (e.g., alpha satellite k-mers at tf=20-100)
+///   even when the seed threshold is high (e.g., lu=100).
+///
+/// Other design decisions:
 /// - Extensions sorted by tf proximity (not absolute tf) to stay within the
-///   same repeat's frequency band. Prevents high-copy dispersed elements
-///   (Alu tf=100K) from pulling the DFS away from tandem repeats (alpha sat tf=200).
+///   same repeat's frequency band.
 /// - Backtrack budget counts fork decisions only, not linear chain unwinds.
 /// - Hard step limit (MAX_DFS_STEPS=100K) bounds total work per seed.
 /// - Global cache used only for seed deduplication, not during DFS traversal.
@@ -356,13 +364,20 @@ pub fn tr_greedy_finder_bidirectional(
     k: usize,
     lu: Option<u32>,
     max_backtracks: usize,
+    ext_lu: Option<u32>,
 ) -> Vec<FinderResult> {
-    let min_tf: u32 = match lu {
+    let seed_min_tf: u32 = match lu {
         Some(val) => if val <= 1 { 2 } else { val },
         None => {
             let v = (coverage * 100.0) as u32;
             if v <= 1 { 2 } else { v }
         }
+    };
+
+    // Extension threshold: use ext_lu if provided, otherwise same as seed threshold
+    let ext_min_tf: u32 = match ext_lu {
+        Some(val) => if val <= 1 { 2 } else { val },
+        None => seed_min_tf,
     };
 
     let index = KmerIndex::from_sdat(sdat, k);
@@ -380,7 +395,7 @@ pub fn tr_greedy_finder_bidirectional(
     let mut cache: HashMap<u64, (usize, u8, usize)> = HashMap::new();
 
     for &(start_encoded, tf) in &encoded_sdat {
-        if tf < min_tf {
+        if tf < seed_min_tf {
             break;
         }
         if cache.contains_key(&start_encoded) {
@@ -391,7 +406,7 @@ pub fn tr_greedy_finder_bidirectional(
 
         // === Right DFS ===
         let right_result = dfs_extend_right(
-            start_encoded, tf, &index, k, min_tf, max_depth, max_backtracks,
+            start_encoded, tf, &index, k, ext_min_tf, max_depth, max_backtracks,
             k_mask, k_minus_1_mask,
         );
 
@@ -411,7 +426,7 @@ pub fn tr_greedy_finder_bidirectional(
             // === Left DFS with remaining budget ===
             let remaining_bt = max_backtracks.saturating_sub(right_result.backtracks);
             let left_result = dfs_extend_left(
-                start_encoded, tf, &index, k, min_tf, max_depth, remaining_bt,
+                start_encoded, tf, &index, k, ext_min_tf, max_depth, remaining_bt,
             );
 
             if left_result.found_tr {
@@ -725,7 +740,7 @@ mod tests {
     #[test]
     fn test_bidirectional_finds_tr() {
         let sdat = make_circular_sdat("AATGG", 1000, 3);
-        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000);
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, None);
         assert!(!results.is_empty());
         assert_eq!(results[0].status, "tr");
     }
@@ -754,7 +769,7 @@ mod tests {
             ("GAA".to_string(), 100),
             ("AAT".to_string(), 100),
         ];
-        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000);
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
         assert!(!tr_results.is_empty(), "DFS should find TR via tf-proximity sorting");
     }
@@ -776,7 +791,7 @@ mod tests {
         ];
         // Ensure sdat is sorted by tf descending (as in real data)
         real_sdat.sort_by(|a, b| b.1.cmp(&a.1));
-        let results = tr_greedy_finder_bidirectional(&real_sdat, 30000, 1.0, 30, 3, Some(50), 1000);
+        let results = tr_greedy_finder_bidirectional(&real_sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
         assert!(!tr_results.is_empty(), "Proximity sort should avoid high-tf attractor and find TR");
     }
@@ -793,7 +808,7 @@ mod tests {
             ("TAA".to_string(), 100),
             ("AAT".to_string(), 100),
         ];
-        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000);
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(50), 1000, None);
         let tr_results: Vec<_> = results.iter().filter(|r| r.status == "tr").collect();
         assert!(!tr_results.is_empty(), "DFS should find TR despite multiple forks");
     }
@@ -801,8 +816,33 @@ mod tests {
     #[test]
     fn test_no_backtrack_needed_for_simple_repeat() {
         let sdat = make_circular_sdat("AATGG", 1000, 3);
-        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 0);
+        let results = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 0, None);
         assert!(!results.is_empty());
         assert_eq!(results[0].status, "tr");
+    }
+
+    #[test]
+    fn test_two_tier_threshold_finds_tr_with_low_ext_lu() {
+        // Simulate alpha satellite scenario:
+        // - Seed k-mer at tf=200 (above seed_lu=100)
+        // - Most cycle k-mers at tf=30 (below seed_lu=100, above ext_lu=10)
+        // With single threshold (lu=100), the cycle breaks because tf=30 < 100.
+        // With two-tier (seed_lu=100, ext_lu=10), DFS can traverse tf=30 k-mers.
+        let sdat = vec![
+            ("ATC".to_string(), 200),  // seed (tf >= seed_lu)
+            ("TCG".to_string(), 30),   // cycle (tf < seed_lu, tf >= ext_lu)
+            ("CGA".to_string(), 30),   // cycle
+            ("GAA".to_string(), 30),   // cycle
+            ("AAT".to_string(), 30),   // cycle
+        ];
+        // With ext_lu=None (defaults to seed_lu=100), cycle breaks: tf=30 < 100
+        let results_no_ext = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, None);
+        let tr_no_ext: Vec<_> = results_no_ext.iter().filter(|r| r.status == "tr").collect();
+        assert!(tr_no_ext.is_empty(), "Without ext_lu, cycle should break (tf=30 < seed_lu=100)");
+
+        // With ext_lu=10, DFS can traverse tf=30 k-mers
+        let results_ext = tr_greedy_finder_bidirectional(&sdat, 30000, 1.0, 30, 3, Some(100), 1000, Some(10));
+        let tr_ext: Vec<_> = results_ext.iter().filter(|r| r.status == "tr").collect();
+        assert!(!tr_ext.is_empty(), "With ext_lu=10, DFS should find TR through tf=30 k-mers");
     }
 }

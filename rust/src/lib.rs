@@ -8,10 +8,12 @@ pub mod probe_design;
 
 use kmer_index::KmerIndex;
 
-/// Bidirectional TR finder with DFS backtracking.
+/// Bidirectional TR finder with DFS backtracking and two-tier threshold.
+/// - lu: seed selection threshold (high). Only k-mers with tf >= lu are used as DFS roots.
+/// - ext_lu: extension threshold (low). During DFS, extensions with tf >= ext_lu are followed.
 /// Returns Vec<(status, second_status, next_rid, next_i, sequence)>.
 #[pyfunction]
-#[pyo3(signature = (sdat, max_depth=30_000, coverage=30.0, min_fraction_to_continue=30, k=23, lu=None, max_backtracks=1000))]
+#[pyo3(signature = (sdat, max_depth=30_000, coverage=30.0, min_fraction_to_continue=30, k=23, lu=None, max_backtracks=1000, ext_lu=None))]
 fn tr_greedy_finder_bidirectional(
     sdat: Vec<(String, u32)>,
     max_depth: usize,
@@ -20,6 +22,7 @@ fn tr_greedy_finder_bidirectional(
     k: usize,
     lu: Option<u32>,
     max_backtracks: usize,
+    ext_lu: Option<u32>,
 ) -> PyResult<Vec<(String, Option<String>, Option<usize>, Option<usize>, Option<String>)>> {
     let results = tr_finder::tr_greedy_finder_bidirectional(
         &sdat,
@@ -29,6 +32,7 @@ fn tr_greedy_finder_bidirectional(
         k,
         lu,
         max_backtracks,
+        ext_lu,
     );
     Ok(results
         .into_iter()

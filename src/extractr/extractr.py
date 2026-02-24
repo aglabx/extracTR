@@ -286,6 +286,7 @@ def run_it():
     parser.add_argument("--skip-probes", help="Skip FISH probe design step.", action="store_true", default=False)
     parser.add_argument("--skip-variants", help="Skip variant enrichment step.", action="store_true", default=False)
     parser.add_argument("--max-backtracks", help="Max DFS backtracks per seed (Rust backend only).", default=1000, type=int, required=False)
+    parser.add_argument("--ext-lu", help="Extension threshold for DFS (lower than lu to find satellites with variable k-mer freq). Default: same as lu.", default=None, type=int, required=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
     args = parser.parse_args()
     
@@ -307,6 +308,7 @@ def run_it():
         "skip_probes": args.skip_probes,
         "skip_variants": args.skip_variants,
         "max_backtracks": args.max_backtracks,
+        "ext_lu": args.ext_lu,
         "debug": args.debug,
     }
     
@@ -318,9 +320,16 @@ def run_it():
     debug = settings.get("debug", False)
     if settings["lu"] is None:
         settings["lu"] = int(100 * settings["coverage"])
-    lu = int(settings.get("lu"))
+    lu = int(settings["lu"])
     if lu <= 1:
         lu = 2
+    ext_lu = settings.get("ext_lu")
+    if ext_lu is not None:
+        ext_lu = int(ext_lu)
+        if ext_lu <= 1:
+            ext_lu = 2
+    # For index computation and sdat loading, use the lower of lu and ext_lu
+    index_lu = min(lu, ext_lu) if ext_lu is not None else lu
     prefix = settings.get("output", "test")
     min_fraction_to_continue = settings.get("min_fraction_to_continue", 30)
     k = settings.get("k", 23)
@@ -328,8 +337,12 @@ def run_it():
     _setup_logging(debug)
     pipeline_t0 = time.time()
 
-    log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, lu=%d, backend=%s",
-             k, coverage, lu, "rust" if _HAS_RUST else "python")
+    if ext_lu is not None:
+        log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, seed_lu=%d, ext_lu=%d, backend=%s",
+                 k, coverage, lu, ext_lu, "rust" if _HAS_RUST else "python")
+    else:
+        log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, lu=%d, backend=%s",
+                 k, coverage, lu, "rust" if _HAS_RUST else "python")
 
     # Check dependencies (skip when precomputed index is provided)
     if not settings["aindex"]:
@@ -340,29 +353,32 @@ def run_it():
     log.info("[1/6] Building k-mer index...")
     if settings["aindex"]:
         log.info("  Loading precomputed index: %s", settings["aindex"])
-        kmer2tf, sdat = get_index(settings["aindex"], lu)
+        kmer2tf, sdat = get_index(settings["aindex"], index_lu)
     elif fastq1 and fastq2:
         log.info("  Input: PE reads %s, %s", fastq1, fastq2)
-        kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=lu, debug=debug)
+        kmer2tf, sdat = compute_and_get_index(fastq1, fastq2, prefix, threads, lu=index_lu, debug=debug)
     elif fastq1 and not fastq2:
         log.info("  Input: SE reads %s", fastq1)
-        kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=lu, debug=debug)
+        kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=index_lu, debug=debug)
     elif fasta:
         log.info("  Input: FASTA %s", fasta)
-        kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=lu, debug=debug)
+        kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=index_lu, debug=debug)
     else:
         raise Exception("No input data")
-    log.info("  Loaded %d k-mers with tf >= %d (%s)", len(sdat), lu, _elapsed(t0))
+    log.info("  Loaded %d k-mers with tf >= %d (%s)", len(sdat), index_lu, _elapsed(t0))
 
     ### step 2. Find tandem repeats using circular path in de bruijn graph
     t0 = time.time()
     max_backtracks = settings.get("max_backtracks", 1000)
     if _HAS_RUST:
-        log.info("[2/6] Detecting tandem repeats (DFS backtracking, max_bt=%d)...", max_backtracks)
+        if ext_lu is not None:
+            log.info("[2/6] Detecting tandem repeats (DFS, seed_lu=%d, ext_lu=%d, max_bt=%d)...", lu, ext_lu, max_backtracks)
+        else:
+            log.info("[2/6] Detecting tandem repeats (DFS backtracking, max_bt=%d)...", max_backtracks)
     else:
         log.info("[2/6] Detecting tandem repeats (bidirectional greedy search)...")
     if _HAS_RUST:
-        repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu, max_backtracks=max_backtracks)
+        repeats = _rs_bidirectional(sdat, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu, max_backtracks=max_backtracks, ext_lu=ext_lu)
     else:
         repeats = tr_greedy_finder_bidirectional(sdat, kmer2tf, max_depth=30_000, coverage=coverage, min_fraction_to_continue=min_fraction_to_continue, k=k, lu=lu)
 
