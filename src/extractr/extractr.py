@@ -7,7 +7,9 @@
 
 import argparse
 import logging
+import os
 import shutil
+import subprocess
 import sys
 import time
 from .core_functions.index_tools import compute_and_get_index, compute_and_get_index_for_fasta, get_index
@@ -18,7 +20,7 @@ from .core_functions.probe_design import (
 )
 from tqdm import tqdm
 
-from typing import Dict, List, Set
+from typing import List, Set
 from collections import defaultdict
 
 try:
@@ -53,7 +55,146 @@ def _elapsed(t0):
     return f"{dt / 60:.1f}min"
 
 
-def check_dependencies(need_index_tools=True):
+def _reverse_complement(seq):
+    """Return reverse complement of a DNA sequence."""
+    complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C',
+                  'a': 't', 't': 'a', 'c': 'g', 'g': 'c',
+                  'N': 'N', 'n': 'n'}
+    return ''.join(complement.get(b, 'N') for b in reversed(seq))
+
+
+def _extract_bed_sequences(fasta_file, bed_file, arrays_fasta):
+    """Extract sequences from FASTA based on BED coordinates.
+
+    Reads BED file (from tanbed), groups by chromosome, then iterates
+    through FASTA extracting sequences. Writes arrays as FASTA.
+
+    Returns number of extracted sequences.
+    """
+    # Parse BED, group by chromosome
+    bed_entries = {}
+    with open(bed_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            fields = line.split('\t')
+            if len(fields) < 3:
+                continue
+            chr_name = fields[0].split()[0]
+            start = int(fields[1])
+            end = int(fields[2])
+            strand = fields[5] if len(fields) > 5 else '+'
+            period = int(fields[3]) if len(fields) > 3 else 1
+            if start >= end or start < 0:
+                continue
+            bed_entries.setdefault(chr_name, []).append((start, end, strand, period))
+
+    for chr_name in bed_entries:
+        bed_entries[chr_name].sort(key=lambda x: x[0])
+
+    total_entries = sum(len(v) for v in bed_entries.values())
+    log.info("  BED: %d entries across %d chromosomes", total_entries, len(bed_entries))
+
+    # Iterate FASTA, extract sequences
+    extracted = 0
+    with open(arrays_fasta, 'w') as out_fh:
+        current_chr = None
+        current_seq_parts = []
+
+        def _process_chromosome(chr_name, seq):
+            nonlocal extracted
+            if chr_name not in bed_entries:
+                return
+            seq = seq.upper()
+            chr_len = len(seq)
+            for start, end, strand, period in bed_entries[chr_name]:
+                if end > chr_len:
+                    continue
+                s = seq[start:end]
+                if strand == '-':
+                    s = _reverse_complement(s)
+                out_fh.write(f">{chr_name}_{start}_{end}_{end - start}_{period}\n{s}\n")
+                extracted += 1
+
+        with open(fasta_file) as fa_fh:
+            for line in fa_fh:
+                line = line.strip()
+                if line.startswith('>'):
+                    if current_chr is not None:
+                        _process_chromosome(current_chr, ''.join(current_seq_parts))
+                    current_chr = line[1:].split()[0]
+                    current_seq_parts = []
+                else:
+                    current_seq_parts.append(line)
+            if current_chr is not None:
+                _process_chromosome(current_chr, ''.join(current_seq_parts))
+
+    return extracted
+
+
+def _run_fastan_pipeline(fasta_file, prefix, debug=False):
+    """Run FasTAN + tanbed to find TR arrays in a genome assembly.
+
+    Steps:
+        1. fastan genome.fa prefix.1aln
+        2. tanbed prefix.1aln > prefix.bed
+        3. Extract sequences from BED → prefix.arrays.fasta
+
+    Returns path to arrays FASTA, or None on failure.
+    """
+    aln_file = f"{prefix}.1aln"
+    bed_file = f"{prefix}.bed"
+    arrays_fasta = f"{prefix}.arrays.fasta"
+
+    # Check if already done
+    if os.path.isfile(arrays_fasta) and os.path.getsize(arrays_fasta) > 0:
+        log.info("  FasTAN output found: %s, skipping", arrays_fasta)
+        return arrays_fasta
+
+    # Find binaries
+    fastan_bin = shutil.which("fastan")
+    if not fastan_bin:
+        log.error("fastan binary not found. Install: pip install satellome (or build from source)")
+        return None
+
+    tanbed_bin = shutil.which("tanbed")
+    if not tanbed_bin:
+        log.error("tanbed binary not found. Install: pip install satellome (or build from source)")
+        return None
+
+    # Step 1: Run FasTAN
+    log.info("  Running fastan %s → %s", os.path.basename(fasta_file), os.path.basename(aln_file))
+    cmd = f"{fastan_bin} {fasta_file} {aln_file}"
+    if debug:
+        result = subprocess.run(cmd, shell=True)
+    else:
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode != 0:
+        log.error("fastan failed with exit code %d", result.returncode)
+        return None
+
+    # Step 2: Run tanbed
+    log.info("  Running tanbed %s → %s", os.path.basename(aln_file), os.path.basename(bed_file))
+    cmd = f"{tanbed_bin} {aln_file} > {bed_file}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("tanbed failed with exit code %d: %s", result.returncode, result.stderr)
+        return None
+
+    # Step 3: Extract sequences
+    log.info("  Extracting TR array sequences from genome...")
+    count = _extract_bed_sequences(fasta_file, bed_file, arrays_fasta)
+    log.info("  Extracted %d TR arrays → %s", count, arrays_fasta)
+
+    if count == 0:
+        log.warning("  No TR arrays found by FasTAN")
+        return None
+
+    return arrays_fasta
+
+
+def check_dependencies(need_index_tools=True, need_fastan=False):
     """Check that required external tools are available."""
     missing = []
     if need_index_tools:
@@ -61,6 +202,11 @@ def check_dependencies(need_index_tools=True):
             missing.append("  compute_aindex.py — install: pip install aindex2")
         if not shutil.which("jellyfish"):
             missing.append("  jellyfish — install: conda install -c bioconda jellyfish")
+    if need_fastan:
+        if not shutil.which("fastan"):
+            missing.append("  fastan — install: pip install satellome")
+        if not shutil.which("tanbed"):
+            missing.append("  tanbed — install: pip install satellome")
     if missing:
         log.error("Missing dependencies:")
         for m in missing:
@@ -287,6 +433,7 @@ def run_it():
     parser.add_argument("--skip-variants", help="Skip variant enrichment step.", action="store_true", default=False)
     parser.add_argument("--max-backtracks", help="Max DFS backtracks per seed (Rust backend only).", default=1000, type=int, required=False)
     parser.add_argument("--ext-lu", help="Extension threshold for DFS (lower than lu to find satellites with variable k-mer freq). Default: same as lu.", default=None, type=int, required=False)
+    parser.add_argument("--no-fastan", help="Skip FasTAN pre-step for genome FASTA (use direct graph approach on whole genome).", action="store_true", default=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
     args = parser.parse_args()
     
@@ -309,6 +456,7 @@ def run_it():
         "skip_variants": args.skip_variants,
         "max_backtracks": args.max_backtracks,
         "ext_lu": args.ext_lu,
+        "no_fastan": args.no_fastan,
         "debug": args.debug,
     }
     
@@ -344,9 +492,12 @@ def run_it():
         log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, lu=%d, backend=%s",
                  k, coverage, lu, "rust" if _HAS_RUST else "python")
 
+    no_fastan = settings.get("no_fastan", False)
+    use_fastan = fasta and not no_fastan and not settings["aindex"]
+
     # Check dependencies (skip when precomputed index is provided)
     if not settings["aindex"]:
-        check_dependencies(need_index_tools=True)
+        check_dependencies(need_index_tools=True, need_fastan=use_fastan)
 
     ### step 1. Compute aindex for reads (precomputed index takes priority)
     t0 = time.time()
@@ -360,8 +511,20 @@ def run_it():
     elif fastq1 and not fastq2:
         log.info("  Input: SE reads %s", fastq1)
         kmer2tf, sdat = compute_and_get_index(fastq1, None, prefix, threads, lu=index_lu, debug=debug)
+    elif fasta and use_fastan:
+        log.info("  Input: FASTA %s (genome mode: FasTAN → graph)", fasta)
+        # Step 1a: Run FasTAN to find TR arrays
+        arrays_fasta = _run_fastan_pipeline(fasta, prefix, debug=debug)
+        if arrays_fasta is None:
+            log.warning("  FasTAN failed, falling back to direct graph approach on whole genome")
+            kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=index_lu, debug=debug)
+        else:
+            # Step 1b: Build k-mer index from arrays FASTA (not the whole genome)
+            arrays_prefix = f"{prefix}.arrays"
+            log.info("  Building k-mer index from TR arrays...")
+            kmer2tf, sdat = compute_and_get_index_for_fasta(arrays_fasta, arrays_prefix, threads, lu=index_lu, debug=debug)
     elif fasta:
-        log.info("  Input: FASTA %s", fasta)
+        log.info("  Input: FASTA %s (direct graph mode, --no-fastan)", fasta)
         kmer2tf, sdat = compute_and_get_index_for_fasta(fasta, prefix, threads, lu=index_lu, debug=debug)
     else:
         raise Exception("No input data")
