@@ -446,11 +446,10 @@ def run_it():
     parser.add_argument("--max-backtracks", help="Max DFS backtracks per seed (Rust backend only).", default=1000, type=int, required=False)
     parser.add_argument("--ext-lu", help="Extension threshold for DFS (lower than lu to find satellites with variable k-mer freq). Default: same as lu.", default=None, type=int, required=False)
     parser.add_argument("--no-fastan", help="Skip FasTAN pre-step for genome FASTA (use direct graph approach on whole genome).", action="store_true", default=False)
-    parser.add_argument("--install-tools", help="Install external tools (fastan, tanbed) and exit.", action="store_true", default=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
-    args = parser.parse_args()
 
-    if args.install_tools:
+    # Handle --install-tools before parse_args (to avoid required arg errors)
+    if "--install-tools" in sys.argv:
         from extractr.installers import install_fastan, install_tanbed
         logging.basicConfig(level=logging.INFO, format='%(message)s')
         ok = True
@@ -467,6 +466,8 @@ def run_it():
         else:
             print("OK: tanbed installed")
         sys.exit(0 if ok else 1)
+
+    args = parser.parse_args()
     
     settings = {
         "fastq1": args.fastq1,
