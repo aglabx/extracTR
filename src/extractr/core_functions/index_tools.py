@@ -30,6 +30,39 @@ def _run_command(command, debug=False):
     log.debug("  Command finished in %.1fs", dt)
 
 
+def _needs_gz_workaround(fastq1, fastq2):
+    """Check if any input files are gzipped (jellyfish can't read .gz directly)."""
+    for f in (fastq1, fastq2):
+        if f and f.endswith(".gz"):
+            return True
+    return False
+
+
+def _decompress_for_index(fastq1, fastq2, prefix, threads, lu, reads_type, debug=False):
+    """Use jellyfish generator to handle .gz files without decompressing to disk."""
+    gen_file = f"{prefix}.generator.sh"
+    files = [f for f in (fastq1, fastq2) if f]
+    with open(gen_file, "w") as fh:
+        for f in files:
+            if f.endswith(".gz"):
+                fh.write(f"zcat {f}\n")
+            else:
+                fh.write(f"cat {f}\n")
+    n_generators = min(len(files), 2)
+    jf2_file = f"{prefix}.23.jf2"
+    command = (
+        f"jellyfish count -m 23 -t {threads} -s 5G -C -L {lu} "
+        f"-o {jf2_file} -g {gen_file} -G {n_generators}"
+    )
+    _run_command(command, debug=debug)
+    os.remove(gen_file)
+    # dump + sort via compute_aindex.py with existing jf2
+    # Pass a real file as -i to satisfy existence check (it won't be used since -j is set)
+    real_file = files[0]
+    command = f"compute_aindex.py -i {real_file} -j {jf2_file} -t {reads_type} -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
+    _run_command(command, debug=debug)
+
+
 def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
 
     lu = int(lu)
@@ -38,7 +71,11 @@ def compute_and_get_index(fastq1, fastq2, prefix, threads, lu=2, debug=False):
 
     if not os.path.isfile(sdat_file) or not os.path.isfile(index_prefix_file):
       log.info("  Computing aindex (threads=%d)...", threads)
-      if fastq1 and fastq2:
+      if _needs_gz_workaround(fastq1, fastq2):
+          log.info("  Using jellyfish generator for .gz files")
+          reads_type = "fastq" if fastq1 and fastq2 else "se"
+          _decompress_for_index(fastq1, fastq2, prefix, threads, lu, reads_type, debug=debug)
+      elif fastq1 and fastq2:
           command = f"compute_aindex.py -i {fastq1},{fastq2} -t fastq -o {prefix} --lu {lu} --sort 1 -P {threads} --onlyindex 1"
           _run_command(command, debug=debug)
       elif fastq1 and fastq2 is None:
