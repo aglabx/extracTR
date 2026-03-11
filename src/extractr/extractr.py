@@ -194,19 +194,31 @@ def _run_fastan_pipeline(fasta_file, prefix, debug=False):
     return arrays_fasta
 
 
+def _find_tool(name):
+    """Find a tool in system PATH or extracTR bin directory."""
+    path = shutil.which(name)
+    if path:
+        return path
+    try:
+        from extractr.installers.base import check_binary_exists
+        return check_binary_exists(name)
+    except ImportError:
+        return None
+
+
 def check_dependencies(need_index_tools=True, need_fastan=False):
     """Check that required external tools are available."""
     missing = []
     if need_index_tools:
-        if not shutil.which("compute_aindex.py"):
+        if not _find_tool("compute_aindex.py"):
             missing.append("  compute_aindex.py — install: pip install aindex2")
-        if not shutil.which("jellyfish"):
+        if not _find_tool("jellyfish"):
             missing.append("  jellyfish — install: conda install -c bioconda jellyfish")
     if need_fastan:
-        if not shutil.which("fastan"):
-            missing.append("  fastan — install: pip install satellome")
-        if not shutil.which("tanbed"):
-            missing.append("  tanbed — install: pip install satellome")
+        if not _find_tool("fastan"):
+            missing.append("  fastan — install: extracTR --install-tools")
+        if not _find_tool("tanbed"):
+            missing.append("  tanbed — install: extracTR --install-tools")
     if missing:
         log.error("Missing dependencies:")
         for m in missing:
@@ -434,8 +446,27 @@ def run_it():
     parser.add_argument("--max-backtracks", help="Max DFS backtracks per seed (Rust backend only).", default=1000, type=int, required=False)
     parser.add_argument("--ext-lu", help="Extension threshold for DFS (lower than lu to find satellites with variable k-mer freq). Default: same as lu.", default=None, type=int, required=False)
     parser.add_argument("--no-fastan", help="Skip FasTAN pre-step for genome FASTA (use direct graph approach on whole genome).", action="store_true", default=False)
+    parser.add_argument("--install-tools", help="Install external tools (fastan, tanbed) and exit.", action="store_true", default=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
     args = parser.parse_args()
+
+    if args.install_tools:
+        from extractr.installers import install_fastan, install_tanbed
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
+        ok = True
+        print("[1/2] Installing FasTAN...")
+        if not install_fastan(force=True):
+            print("FAILED: FasTAN installation failed")
+            ok = False
+        else:
+            print("OK: FasTAN installed")
+        print("[2/2] Installing tanbed...")
+        if not install_tanbed(force=True):
+            print("FAILED: tanbed installation failed")
+            ok = False
+        else:
+            print("OK: tanbed installed")
+        sys.exit(0 if ok else 1)
     
     settings = {
         "fastq1": args.fastq1,
@@ -491,6 +522,15 @@ def run_it():
     else:
         log.info("extracTR v0.3.0 | k=%d, coverage=%.1f, lu=%d, backend=%s",
                  k, coverage, lu, "rust" if _HAS_RUST else "python")
+
+    # Add extracTR bin dir to PATH so fastan/tanbed are found by subprocess
+    try:
+        from extractr.installers.base import get_bin_dir
+        bin_dir = str(get_bin_dir())
+        if bin_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    except ImportError:
+        pass
 
     no_fastan = settings.get("no_fastan", False)
     use_fastan = fasta and not no_fastan and not settings["aindex"]
