@@ -45,7 +45,7 @@ def _decompress_for_index(fastq1, fastq2, prefix, threads, lu, reads_type, debug
     with open(gen_file, "w") as fh:
         for f in files:
             if f.endswith(".gz"):
-                fh.write(f"zcat {f}\n")
+                fh.write(f"pigz -dc {f}\n")
             else:
                 fh.write(f"cat {f}\n")
     n_generators = min(len(files), 2)
