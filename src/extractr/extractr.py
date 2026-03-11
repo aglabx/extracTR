@@ -427,6 +427,25 @@ class KmerPathFinder:
 
 def run_it():
 
+    # Handle --install-tools before argparse (to avoid required arg errors)
+    if "--install-tools" in sys.argv:
+        from extractr.installers import install_fastan, install_tanbed
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
+        ok = True
+        print("[1/2] Installing FasTAN...")
+        if not install_fastan(force=True):
+            print("FAILED: FasTAN installation failed")
+            ok = False
+        else:
+            print("OK: FasTAN installed")
+        print("[2/2] Installing tanbed...")
+        if not install_tanbed(force=True):
+            print("FAILED: tanbed installation failed")
+            ok = False
+        else:
+            print("OK: tanbed installed")
+        sys.exit(0 if ok else 1)
+
     parser = argparse.ArgumentParser(description="Extract and analyze tandem repeats from raw DNA sequences.")
     parser.add_argument("-1", "--fastq1", help="Input file with DNA sequences in FASTQ format.", default=None, required=False)
     parser.add_argument("-2", "--fastq2", help="Input file with DNA sequences in FASTQ format (skip for SE).", default=None, required=False)
@@ -447,26 +466,6 @@ def run_it():
     parser.add_argument("--ext-lu", help="Extension threshold for DFS (lower than lu to find satellites with variable k-mer freq). Default: same as lu.", default=None, type=int, required=False)
     parser.add_argument("--no-fastan", help="Skip FasTAN pre-step for genome FASTA (use direct graph approach on whole genome).", action="store_true", default=False)
     parser.add_argument("--debug", help="Show verbose diagnostic output.", action="store_true", default=False)
-
-    # Handle --install-tools before parse_args (to avoid required arg errors)
-    if "--install-tools" in sys.argv:
-        from extractr.installers import install_fastan, install_tanbed
-        logging.basicConfig(level=logging.INFO, format='%(message)s')
-        ok = True
-        print("[1/2] Installing FasTAN...")
-        if not install_fastan(force=True):
-            print("FAILED: FasTAN installation failed")
-            ok = False
-        else:
-            print("OK: FasTAN installed")
-        print("[2/2] Installing tanbed...")
-        if not install_tanbed(force=True):
-            print("FAILED: tanbed installation failed")
-            ok = False
-        else:
-            print("OK: tanbed installed")
-        sys.exit(0 if ok else 1)
-
     args = parser.parse_args()
     
     settings = {
